@@ -991,11 +991,11 @@ class RecentHeatProbabilityAnalyzer:
 # ============================================================
 
 class LotteryScrapers:
-    TIMEOUT = 15
+    TIMEOUT = 20
     CHROME_UA = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
+        "Chrome/136.0.0.0 Safari/537.36"
     )
     HEADERS = {
         "User-Agent": CHROME_UA,
@@ -1062,6 +1062,21 @@ class LotteryScrapers:
         cls._SESSION = session
         return session
 
+    _BLOCK_SIGNALS = ("just a moment", "cloudflare", "access denied",
+                      "enable javascript", "please wait", "checking your browser")
+
+    @classmethod
+    def _is_blocked(cls, r) -> bool:
+        if r is None:
+            return True
+        if r.status_code in (403, 429, 503):
+            return True
+        try:
+            low = r.text[:1200].lower()
+            return any(s in low for s in cls._BLOCK_SIGNALS)
+        except Exception:
+            return False
+
     @classmethod
     def _get(cls, url: str, headers: Optional[Dict[str, str]] = None,
              referer: Optional[str] = None, timeout: Optional[int] = None):
@@ -1073,7 +1088,7 @@ class LotteryScrapers:
                 req_headers["Referer"] = referer
             r = cls._session().get(url, headers=req_headers,
                                    timeout=timeout or cls.TIMEOUT)
-            if r.status_code >= 400:
+            if r.status_code >= 400 or cls._is_blocked(r):
                 return None
             return r
         except Exception:
@@ -1313,12 +1328,18 @@ class LotteryScrapers:
 
     @classmethod
     def scrape_michigan_fantasy5_bulk(cls, count: int = 30) -> List[Dict]:
-        """Michigan Fantasy 5：改抓公開歷史頁，避免官方 API/GraphQL 防護。"""
-        return cls._scrape_year_archives(
+        """Michigan Fantasy 5：依序嘗試多個來源，任一成功即回傳。"""
+        for url_tmpl in (
+            "https://www.lottery.net/michigan/fantasy-5/numbers/{year}",
             "https://www.lotto.net/michigan-fantasy-5/numbers/{year}",
-            count=count,
-            min_year=2010,
-        )
+            "https://www.lotterycorner.com/mi/f5/{year}.html",
+        ):
+            results = cls._scrape_year_archives(url_tmpl, count=count, min_year=2010)
+            if results:
+                print(f"[SCRAPER] Michigan Fantasy5: 使用來源 {url_tmpl.split('/')[2]}")
+                return results
+        print("[SCRAPER] Michigan Fantasy5: 所有來源均無回應（Render IP 可能被封鎖）")
+        return []
 
     @classmethod
     def scrape_california_fantasy5_bulk(cls, count: int = 30) -> List[Dict]:
@@ -1350,13 +1371,19 @@ class LotteryScrapers:
                 break
 
         if results:
+            print("[SCRAPER] California Fantasy5: 使用官方 API")
             return cls._clean_draws(results, count)
 
-        return cls._scrape_year_archives(
+        for url_tmpl in (
             "https://www.lottery.net/california/fantasy-5/numbers/{year}",
-            count=count,
-            min_year=2010,
-        )
+            "https://www.lotto.net/california-fantasy-5/numbers/{year}",
+        ):
+            html_results = cls._scrape_year_archives(url_tmpl, count=count, min_year=2010)
+            if html_results:
+                print(f"[SCRAPER] California Fantasy5: 使用來源 {url_tmpl.split('/')[2]}")
+                return html_results
+        print("[SCRAPER] California Fantasy5: 所有來源均無回應（Render IP 可能被封鎖）")
+        return []
 
     @classmethod
     def scrape_newyork_take5_bulk(cls, count: int = 30) -> List[Dict]:
@@ -5762,21 +5789,34 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
     @app.route("/api/scrape", methods=["POST"])
     def api_scrape():
         """手動觸發智能同步（同 auto-sync 邏輯）"""
-        sync_rpt = syncer.sync_all()
-        details  = []
-        rebuilt  = False
-        for key, info in sync_rpt.items():
-            cfg = LOTTERY_CONFIG[key]
-            ok  = "爬蟲無回應" not in info["message"]
-            if info["new_count"] > 0:
-                rebuilt = True
-            details.append({
-                "ok":  ok,
-                "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）",
-            })
-        if rebuilt:
-            analyzer.run(output_path, server_mode=True)
-        return jsonify({"rebuilt": rebuilt, "details": details})
+        try:
+            sync_rpt = syncer.sync_all()
+            details  = []
+            rebuilt  = False
+            for key, info in sync_rpt.items():
+                cfg = LOTTERY_CONFIG[key]
+                ok  = "爬蟲無回應" not in info["message"] and "封鎖" not in info["message"]
+                if info["new_count"] > 0:
+                    rebuilt = True
+                details.append({
+                    "ok":  ok,
+                    "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）",
+                })
+            if rebuilt:
+                try:
+                    analyzer.run(output_path, server_mode=True)
+                except Exception as e:
+                    print(f"[ERROR] analyzer.run after sync: {e}")
+            return jsonify({"rebuilt": rebuilt, "details": details})
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] api_scrape: {traceback.format_exc()}")
+            return jsonify({
+                "status":  "error",
+                "message": str(e),
+                "rebuilt": False,
+                "details": [{"ok": False, "msg": f"同步失敗：{e}"}],
+            }), 500
 
     @app.route("/api/manual", methods=["POST"])
     def api_manual():
