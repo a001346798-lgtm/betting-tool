@@ -5802,11 +5802,11 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                     "ok":  ok,
                     "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）",
                 })
-            if rebuilt:
-                try:
-                    analyzer.run(output_path, server_mode=True)
-                except Exception as e:
-                    print(f"[ERROR] analyzer.run after sync: {e}")
+            try:
+                analyzer.run(output_path, server_mode=True)
+                rebuilt = True
+            except Exception as e:
+                print(f"[ERROR] analyzer.run after sync: {e}")
             return jsonify({"rebuilt": rebuilt, "details": details})
         except Exception as e:
             import traceback
