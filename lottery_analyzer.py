@@ -119,22 +119,30 @@ def ball_cls(n: int) -> str:
 # SECTION 1 — DATA LOADER  (Supabase backend)
 # ============================================================
 
-# ── Supabase client singleton ────────────────────────────────
-_supa_client = None
+# ── Supabase REST API helpers ─────────────────────────────────
+import requests as _requests
 
-def _get_supa():
-    """回傳已初始化的 Supabase 客戶端（懶初始化，執行緒安全程度足夠單 worker）。"""
-    global _supa_client
-    if _supa_client is None:
-        url = os.environ.get("SUPABASE_URL", "")
-        key = os.environ.get("SUPABASE_KEY", "")
-        if not url or not key:
-            raise RuntimeError(
-                "請設定環境變數 SUPABASE_URL 與 SUPABASE_KEY 後再啟動"
-            )
-        from supabase import create_client
-        _supa_client = create_client(url, key)
-    return _supa_client
+def _supa_base() -> str:
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if not url:
+        raise RuntimeError("請設定環境變數 SUPABASE_URL")
+    # strip any accidentally included path so we always end with /rest/v1
+    for suffix in ("/rest/v1", "/rest"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+    return url.rstrip("/") + "/rest/v1"
+
+def _supa_rhdrs() -> Dict[str, str]:
+    key = os.environ.get("SUPABASE_KEY", "")
+    if not key:
+        raise RuntimeError("請設定環境變數 SUPABASE_KEY")
+    return {"apikey": key, "Authorization": f"Bearer {key}"}
+
+def _supa_whdrs() -> Dict[str, str]:
+    h = _supa_rhdrs()
+    h["Content-Type"] = "application/json"
+    h["Prefer"] = "resolution=merge-duplicates"
+    return h
 
 
 class DataLoader:
@@ -169,21 +177,24 @@ class DataLoader:
 
     def _fetch(self, key: str,
                cutoff_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
-        supa  = _get_supa()
+        base  = _supa_base()
+        hdrs  = _supa_rhdrs()
         PAGE  = 1000
         offset = 0
         all_rows: List[Dict] = []
         while True:
-            q = (
-                supa.table("lottery_draws")
-                .select("draw_date,num1,num2,num3,num4,num5")
-                .eq("lottery_type", key)
-                .order("draw_date", desc=False)
-                .range(offset, offset + PAGE - 1)
-            )
+            params: Dict[str, Any] = {
+                "lottery_type": f"eq.{key}",
+                "select": "draw_date,num1,num2,num3,num4,num5",
+                "order": "draw_date.asc",
+                "offset": str(offset),
+                "limit": str(PAGE),
+            }
             if cutoff_date is not None:
-                q = q.lte("draw_date", cutoff_date.strftime("%Y-%m-%d"))
-            page = q.execute().data
+                params["draw_date"] = f"lte.{cutoff_date.strftime('%Y-%m-%d')}"
+            r = _requests.get(f"{base}/lottery_draws", headers=hdrs, params=params, timeout=30)
+            r.raise_for_status()
+            page = r.json()
             if not page:
                 break
             all_rows.extend(page)
@@ -1539,15 +1550,18 @@ class DataWriter:
         if len(nums) != 5 or len(set(nums)) != 5 or not all(1 <= n <= 39 for n in nums):
             return False
         try:
-            _get_supa().table("lottery_draws").upsert(
-                {
+            r = _requests.post(
+                f"{_supa_base()}/lottery_draws?on_conflict=lottery_type,draw_date",
+                headers=_supa_whdrs(),
+                json={
                     "lottery_type": lottery_key,
                     "draw_date":    date_fmt,
                     "num1": nums[0], "num2": nums[1], "num3": nums[2],
                     "num4": nums[3], "num5": nums[4],
                 },
-                on_conflict="lottery_type,draw_date",
-            ).execute()
+                timeout=30,
+            )
+            r.raise_for_status()
             print(f"  [SAVE] {config['name']}  {date_fmt}  {nums} → Supabase")
             return True
         except Exception as e:
@@ -5874,7 +5888,8 @@ def generate_demo_data(data_dir: Path) -> None:
         ("california_fantasy5", 2500),
         ("newyork_take5",       2000),
     ]
-    supa = _get_supa()
+    api_url = f"{_supa_base()}/lottery_draws?on_conflict=lottery_type,draw_date"
+    hdrs    = _supa_whdrs()
     for key, rows in specs:
         records = []
         for i in range(rows):
@@ -5887,10 +5902,8 @@ def generate_demo_data(data_dir: Path) -> None:
                 "num4": nums[3], "num5": nums[4],
             })
         for start in range(0, len(records), 1000):
-            supa.table("lottery_draws").upsert(
-                records[start:start + 1000],
-                on_conflict="lottery_type,draw_date",
-            ).execute()
+            r = _requests.post(api_url, headers=hdrs, json=records[start:start + 1000], timeout=60)
+            r.raise_for_status()
         print(f"  [DEMO] {key}（{rows} 筆）→ Supabase")
 
 
