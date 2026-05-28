@@ -5716,6 +5716,13 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
 
     @app.route("/")
     def index():
+        # 若報告檔不存在（雲端冷啟動），先產生再回傳
+        if not output_path.exists():
+            try:
+                syncer.sync_all()
+            except Exception:
+                pass
+            analyzer.run(output_path, server_mode=True)
         response = send_file(str(output_path.resolve()))
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
