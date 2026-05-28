@@ -55,6 +55,7 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "sync_grace_days": 1,
         "file_patterns": ["*michigan*result*", "*michigan*fantasy*", "*michigan*history*",
                           "*Michigan*Result*", "*michigan*"],
         "csv_filename":  "michigan_fantasy5.csv",
@@ -67,6 +68,7 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "sync_grace_days": 1,
         "file_patterns": ["*ca_fantasy5*real*", "*california*fantasy5*real*",
                           "*ca_fantasy5*", "*california*real*"],
         "csv_filename":  "california_fantasy5.csv",
@@ -79,6 +81,7 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "sync_grace_days": 1,
         "file_patterns": ["*take5*evening*", "*take5_evening*", "*newyork*take5*", "*ny_take5*"],
         "csv_filename":  "newyork_take5.csv",
         "theme":         {"primary": "#b91c1c", "light": "#fef2f2",
@@ -1507,8 +1510,9 @@ class AutoSyncManager:
             latest_local = df["date"].max().date()
             gap_days = (today_d - latest_local).days
 
-        if gap_days <= 0:
-            return {"new_count": 0, "message": "資料已是最新", "gap_days": 0}
+        grace_days = int(cfg.get("sync_grace_days", 0))
+        if gap_days <= grace_days:
+            return {"new_count": 0, "message": "資料已是最新", "gap_days": gap_days}
 
         print(f"  [SYNC] {cfg['name']}：本地落後 {gap_days} 天，嘗試補齊...")
 
