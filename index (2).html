@@ -1,0 +1,1792 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>複利下注與資金管理工具</title>
+  <!-- Supabase JS SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    input[type=range] { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; outline: none; cursor: pointer; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 2px solid #1e293b; }
+    .page { display: none; }
+    .page.active { display: block; }
+    #calc-panel { transition: all 0.3s ease; transform-origin: bottom right; }
+    #calc-panel.hidden-calc { transform: scale(0); opacity: 0; pointer-events: none; }
+    .positive { color: #4ade80; }
+    .negative { color: #f87171; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #334155; font-size: 0.85rem; }
+    th { background: #1e293b; color: #94a3b8; font-weight: 600; position: sticky; top: 0; z-index: 1; }
+    tr:hover td { background: rgba(30,41,59,0.4); }
+    .calc-btn { background: #334155; border: none; color: #e2e8f0; padding: 12px; border-radius: 8px; font-size: 1rem; cursor: pointer; transition: background 0.15s; text-align: center; }
+    .calc-btn:hover { background: #475569; }
+    .calc-btn.op  { background: #1d4ed8; } .calc-btn.op:hover  { background: #2563eb; }
+    .calc-btn.eq  { background: #059669; } .calc-btn.eq:hover  { background: #10b981; }
+    .calc-btn.clr { background: #dc2626; } .calc-btn.clr:hover { background: #ef4444; }
+    .nav-btn { padding: 6px 14px; border-radius: 6px; font-size: 0.82rem; font-weight: 600; cursor: pointer; white-space: nowrap; background: transparent; color: #94a3b8; border: none; transition: all 0.2s; flex-shrink: 0; }
+    .nav-btn:hover { background: #334155; color: #e2e8f0; }
+    .nav-btn.active { background: #0ea5e9; color: #fff; }
+    .color-dot { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; flex-shrink: 0; transition: border-color 0.15s, transform 0.15s; }
+    .color-dot:hover { transform: scale(1.2); }
+    .color-dot.selected { border-color: #fff; transform: scale(1.15); }
+    /* Toast */
+    #toast { position:fixed; bottom:80px; left:50%; transform:translateX(-50%) translateY(20px); z-index:9999; transition:all 0.3s; opacity:0; pointer-events:none; }
+    #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+    /* Loading overlay */
+    #loading-overlay { position:fixed; inset:0; background:rgba(15,23,42,0.85); z-index:9998; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+    #loading-overlay.hidden { display:none; }
+    .spinner { width:36px; height:36px; border:3px solid #334155; border-top-color:#0ea5e9; border-radius:50%; animation:spin 0.8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+<!-- ====================================================
+     載入遮罩
+===================================================== -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div class="text-sm text-slate-400" id="loading-msg">正在連接雲端資料庫…</div>
+</div>
+
+<!-- Toast 通知 -->
+<div id="toast" class="text-sm font-semibold px-4 py-2 rounded-xl shadow-2xl"></div>
+
+<!-- 頂部導覽列 -->
+<header class="bg-slate-800 border-b border-slate-700 sticky top-0 z-40">
+  <div class="max-w-5xl mx-auto px-3 py-2 flex items-center gap-2">
+    <span class="text-sm font-bold text-sky-400 tracking-wide flex-shrink-0">💰 複利資金管理</span>
+    <nav class="flex gap-1 overflow-x-auto flex-1" id="main-nav"></nav>
+    <!-- 雲端狀態指示＋設定按鈕 -->
+    <button id="db-status" onclick="openDbModal()"
+      class="flex-shrink-0 flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+             bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+      title="雲端同步設定">
+      <span id="db-status-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+      <span id="db-status-text">⚙️ 雲端同步設定</span>
+    </button>
+  </div>
+</header>
+
+<!-- ====================================================
+     Supabase 設定 Modal（點按鈕開啟）
+===================================================== -->
+<div id="db-modal-backdrop"
+  class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+  onclick="handleModalBackdropClick(event)">
+
+  <div id="db-modal"
+    class="w-full max-w-2xl bg-slate-800 rounded-2xl shadow-2xl border border-slate-600 overflow-hidden flex flex-col"
+    style="max-height:90vh;">
+
+    <!-- Modal 頂部 -->
+    <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700 flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span id="modal-status-dot" class="w-3 h-3 rounded-full bg-slate-500 flex-shrink-0"></span>
+        <div>
+          <h3 class="text-base font-bold text-white">☁️ 雲端同步設定</h3>
+          <p id="modal-status-label" class="text-xs text-slate-400 mt-0.5">⚪ 本機儲存模式（尚未連線 Supabase）</p>
+        </div>
+      </div>
+      <button onclick="closeDbModal()" class="text-slate-400 hover:text-white text-xl leading-none px-1">✕</button>
+    </div>
+
+    <!-- Modal 主體（可捲動） -->
+    <div class="overflow-y-auto flex-1 px-5 py-4 space-y-4">
+
+      <!-- URL 輸入 -->
+      <div>
+        <label class="text-sm font-semibold text-slate-300 mb-1.5 block">
+          Supabase Project URL
+          <span class="text-xs font-normal text-slate-500 ml-1">（Settings → API → Project URL）</span>
+        </label>
+        <input type="text" id="cfg-url"
+          placeholder="https://xxxxxxxxxxxxxxxxxxxx.supabase.co"
+          class="w-full bg-slate-900 text-slate-100 px-4 py-3 rounded-xl text-sm border border-slate-600 outline-none focus:border-sky-500 font-mono transition-colors" />
+      </div>
+
+      <!-- Anon Key 輸入 -->
+      <div>
+        <label class="text-sm font-semibold text-slate-300 mb-1.5 block">
+          Supabase Anon Public Key
+          <span class="text-xs font-normal text-slate-500 ml-1">（Settings → API → anon public，非 service_role）</span>
+        </label>
+        <div class="relative">
+          <input type="password" id="cfg-key"
+            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            class="w-full bg-slate-900 text-slate-100 px-4 py-3 rounded-xl text-sm border border-slate-600 outline-none focus:border-sky-500 font-mono pr-20 transition-colors" />
+          <button onclick="toggleKeyVisibility()"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-200 bg-slate-700 px-2 py-1 rounded">
+            顯示
+          </button>
+        </div>
+      </div>
+
+      <!-- 操作按鈕 -->
+      <div class="flex gap-3 flex-wrap">
+        <button onclick="saveAndConnect()"
+          class="flex-1 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white py-3 rounded-xl text-sm font-bold shadow-lg transition-colors min-w-32">
+          💾 儲存並連線
+        </button>
+        <button onclick="disconnectDb()"
+          class="flex-1 bg-slate-600 hover:bg-slate-500 text-slate-200 py-3 rounded-xl text-sm font-semibold transition-colors min-w-32">
+          斷開 / 切回本機
+        </button>
+      </div>
+
+      <p class="text-xs text-slate-500 bg-slate-900 rounded-lg px-3 py-2">
+        🔒 URL 與 Key 僅儲存於您的瀏覽器 localStorage，不會傳送至任何第三方。重整頁面後無需重新輸入。
+      </p>
+
+      <!-- SQL 建表指引（可展開） -->
+      <details class="bg-slate-900 rounded-xl overflow-hidden">
+        <summary class="text-xs text-indigo-400 cursor-pointer font-semibold px-4 py-3 hover:bg-slate-800 transition-colors select-none">
+          📋 首次使用必看：點此展開 Supabase 建表 SQL
+        </summary>
+        <div class="px-4 pb-4">
+          <p class="text-xs text-slate-500 mb-2 mt-1">複製以下 SQL，到 Supabase → SQL Editor → New query 貼上並執行：</p>
+          <div class="relative">
+            <pre id="sql-block" class="text-xs text-slate-300 bg-black/40 rounded-lg p-3 overflow-x-auto leading-relaxed select-all">-- ① 項目資料表
+create table projects (
+  id text primary key,
+  label text not null,
+  color_idx integer not null default 0,
+  sort_order integer not null default 0,
+  initial_capital numeric not null default 0,
+  current_balance numeric not null default 0,
+  slider_pct numeric not null default 5,
+  manual_bet numeric not null default 0,
+  manual_pct numeric not null default 0
+);
+
+-- ② 下注紀錄資料表
+create table betting_records (
+  id bigint primary key,
+  project_id text,
+  date text not null,
+  project text not null,
+  init_bal numeric not null default 0,
+  pct numeric not null default 0,
+  bet numeric not null default 0,
+  pnl numeric,
+  after_bal numeric,
+  status text not null default 'pending',
+  note text default ''
+);
+
+-- ③ 應用程式設定表（儲存備註標籤等）
+create table app_settings (
+  key text primary key,
+  value jsonb not null
+);
+
+-- ④ 開放 anon key 讀寫（個人工具）
+alter table projects enable row level security;
+alter table betting_records enable row level security;
+alter table app_settings enable row level security;
+create policy "anon_all" on projects
+  for all using (true) with check (true);
+create policy "anon_all" on betting_records
+  for all using (true) with check (true);
+create policy "anon_all" on app_settings
+  for all using (true) with check (true);</pre>
+            <button onclick="copySql()"
+              class="absolute top-2 right-2 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded transition-colors"
+              id="copy-sql-btn">
+              📋 複製
+            </button>
+          </div>
+        </div>
+      </details>
+
+    </div><!-- /Modal 主體 -->
+  </div><!-- /Modal -->
+</div><!-- /Backdrop -->
+
+<main class="max-w-5xl mx-auto px-3 py-4 pb-24">
+
+  <!-- 總覽頁面 -->
+  <div id="page-overview" class="page active">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="text-lg font-bold text-sky-300">📊 綜合總覽控制台</h2>
+      <button id="undo-btn" onclick="undoLastAction()" class="hidden text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-3 py-1.5 rounded-lg">↩ 復原上一步</button>
+    </div>
+
+    <!-- 項目管理 -->
+    <div class="bg-slate-800 rounded-xl p-4 mb-4 border border-indigo-600">
+      <h3 class="text-sm font-semibold text-indigo-300 mb-3">⚙️ 項目管理</h3>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <input type="text" id="new-proj-name" placeholder="項目名稱（最多20字）" maxlength="20"
+          class="flex-1 min-w-28 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-indigo-400"
+          onkeydown="if(event.key==='Enter') addProject()" />
+        <input type="number" id="new-proj-capital" placeholder="初始本金（可留0）" min="0" inputmode="decimal"
+          class="flex-1 min-w-28 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-indigo-400"
+          onkeydown="if(event.key==='Enter') addProject()" />
+      </div>
+      <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <span class="text-xs text-slate-500">選擇顏色：</span>
+        <div id="color-picker-row" class="flex gap-2 flex-wrap"></div>
+      </div>
+      <button onclick="addProject()" class="bg-indigo-700 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold w-full">＋ 新增項目</button>
+      <div id="proj-mgmt-list" class="space-y-2 mt-3"></div>
+    </div>
+
+    <!-- 常用備註標籤管理 -->
+    <div class="bg-slate-800 rounded-xl p-4 mb-4 border border-slate-600">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">🏷️ 常用備註標籤管理</h3>
+      <div class="flex gap-2 mb-3">
+        <input type="text" id="new-tag-input" placeholder="輸入新標籤文字…" maxlength="20"
+          class="flex-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-slate-400"
+          onkeydown="if(event.key==='Enter') addNoteTag()" />
+        <button onclick="addNoteTag()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap">＋ 新增</button>
+      </div>
+      <div id="tags-manage-list" class="flex flex-wrap gap-2"><span class="text-xs text-slate-500">尚無標籤</span></div>
+    </div>
+
+    <!-- 今日投注總和 -->
+    <div class="bg-slate-800 rounded-xl p-4 mb-4 border border-slate-700">
+      <h3 class="text-sm font-semibold text-slate-400 mb-3">今日投注預計總和</h3>
+      <div id="ov-cards" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-3"></div>
+      <div class="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg p-3 flex justify-between items-center">
+        <span class="text-sm text-slate-300 font-semibold">今日全部項目總投注</span>
+        <span class="text-2xl font-bold text-yellow-300" id="ov-total">0</span>
+      </div>
+    </div>
+
+    <!-- 統計面板 -->
+    <div class="bg-slate-800 rounded-xl p-4 mb-4 border border-slate-700" id="stats-panel">
+      <h3 class="text-sm font-semibold text-slate-400 mb-3">📈 績效統計</h3>
+      <div id="stats-content" class="text-xs text-slate-500 text-center py-2">尚無已結算紀錄</div>
+    </div>
+
+    <!-- 歷史紀錄 -->
+    <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 class="text-sm font-semibold text-slate-400">歷史紀錄管理</h3>
+        <button onclick="clearAllRecords()" class="text-xs bg-red-700 hover:bg-red-600 text-white px-3 py-1 rounded-lg">🗑 清空全部</button>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <div class="flex items-center gap-1">
+          <label class="text-xs text-slate-500">從</label>
+          <input type="date" id="filter-start" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500" />
+        </div>
+        <div class="flex items-center gap-1">
+          <label class="text-xs text-slate-500">到</label>
+          <input type="date" id="filter-end" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500" />
+        </div>
+        <div class="flex items-center gap-1">
+          <label class="text-xs text-slate-500">項目</label>
+          <select id="filter-project" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500 cursor-pointer">
+            <option value="">全部項目</option>
+          </select>
+        </div>
+        <button onclick="filterRecords()" class="text-xs bg-sky-700 hover:bg-sky-600 text-white px-3 py-1 rounded-lg">篩選</button>
+        <button onclick="resetFilter()" class="text-xs bg-slate-600 hover:bg-slate-500 text-white px-3 py-1 rounded-lg">重設</button>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-2 items-center">
+        <button onclick="exportJSON()" class="text-xs bg-teal-700 hover:bg-teal-600 text-white px-3 py-1 rounded-lg">⬇ 匯出 JSON</button>
+        <button onclick="exportCSV()" class="text-xs bg-teal-700 hover:bg-teal-600 text-white px-3 py-1 rounded-lg">⬇ 匯出 CSV</button>
+        <label class="text-xs bg-orange-700 hover:bg-orange-600 text-white px-3 py-1 rounded-lg cursor-pointer">
+          ⬆ 匯入數據<input type="file" id="import-file" accept=".json" class="hidden" onchange="importData(event)" />
+        </label>
+        <span id="storage-info" class="text-xs text-slate-500 ml-auto"></span>
+      </div>
+      <div class="overflow-x-auto rounded-lg" style="max-height:420px; overflow-y:auto;">
+        <table>
+          <thead>
+            <tr><th>日期</th><th>項目</th><th>初始餘額</th><th>比例%</th><th>下注額</th><th>損益</th><th>結算後</th><th>操作</th></tr>
+          </thead>
+          <tbody id="records-tbody">
+            <tr><td colspan="8" class="text-center text-slate-500 py-6">尚無紀錄</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="dynamic-pages"></div>
+</main>
+
+<!-- 懸浮計算機 -->
+<button onclick="toggleCalc()" class="fixed bottom-5 right-5 z-50 w-14 h-14 rounded-full bg-sky-600 hover:bg-sky-500 shadow-2xl text-2xl flex items-center justify-center">🧮</button>
+<div id="calc-panel" class="hidden-calc fixed bottom-24 right-5 z-50 w-80 bg-slate-800 rounded-2xl shadow-2xl border border-slate-600 overflow-hidden">
+  <div class="flex border-b border-slate-700">
+    <button id="btn-std" onclick="switchCalcMode('std')" class="flex-1 py-2 text-xs font-semibold bg-sky-700 text-white">標準計算機</button>
+    <button id="btn-compound" onclick="switchCalcMode('compound')" class="flex-1 py-2 text-xs font-semibold bg-slate-700 text-slate-300">複利模擬器</button>
+  </div>
+  <div id="calc-std" class="p-3">
+    <div class="bg-slate-900 rounded-lg p-3 mb-3 text-right" style="min-height:64px;">
+      <div class="text-xs text-slate-500 h-5" id="calc-expr"></div>
+      <div class="text-2xl font-bold text-emerald-300 break-all" id="calc-display">0</div>
+    </div>
+    <div class="grid grid-cols-4 gap-2">
+      <button class="calc-btn clr col-span-2" onclick="calcAction('AC')">AC</button>
+      <button class="calc-btn op" onclick="calcAction('%')">%</button>
+      <button class="calc-btn op" onclick="calcAction('/')">÷</button>
+      <button class="calc-btn" onclick="calcAction('7')">7</button><button class="calc-btn" onclick="calcAction('8')">8</button><button class="calc-btn" onclick="calcAction('9')">9</button>
+      <button class="calc-btn op" onclick="calcAction('*')">×</button>
+      <button class="calc-btn" onclick="calcAction('4')">4</button><button class="calc-btn" onclick="calcAction('5')">5</button><button class="calc-btn" onclick="calcAction('6')">6</button>
+      <button class="calc-btn op" onclick="calcAction('-')">−</button>
+      <button class="calc-btn" onclick="calcAction('1')">1</button><button class="calc-btn" onclick="calcAction('2')">2</button><button class="calc-btn" onclick="calcAction('3')">3</button>
+      <button class="calc-btn op" onclick="calcAction('+')">＋</button>
+      <button class="calc-btn" onclick="calcAction('0')">0</button><button class="calc-btn" onclick="calcAction('.')">.</button>
+      <button class="calc-btn" onclick="calcAction('back')">⌫</button>
+      <button class="calc-btn eq" onclick="calcAction('=')">=</button>
+    </div>
+  </div>
+  <div id="calc-compound" class="p-3 hidden">
+    <div class="space-y-3">
+      <div><label class="text-xs text-slate-400">目前本金</label><input type="number" id="cp-principal" placeholder="例：10000" inputmode="decimal" class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500" /></div>
+      <div><label class="text-xs text-slate-400">每期報酬率 (%)</label><input type="number" id="cp-rate" placeholder="例：5" step="0.01" inputmode="decimal" class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500" /></div>
+      <div><label class="text-xs text-slate-400">預計期數</label><input type="number" id="cp-periods" placeholder="例：12" inputmode="numeric" class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500" /></div>
+      <button onclick="calcCompound()" class="w-full bg-emerald-700 hover:bg-emerald-600 text-white py-2 rounded-lg text-sm font-semibold">計算複利</button>
+      <div id="compound-result" class="bg-slate-900 rounded-lg overflow-hidden hidden"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// 色盤
+// ============================================================
+const PALETTE = [
+  { ring:'border-emerald-500', accent:'text-emerald-400', sliderColor:'#10b981', btn:'bg-emerald-700 hover:bg-emerald-600' },
+  { ring:'border-sky-500',     accent:'text-sky-400',     sliderColor:'#0ea5e9', btn:'bg-sky-700 hover:bg-sky-600' },
+  { ring:'border-violet-500',  accent:'text-violet-400',  sliderColor:'#8b5cf6', btn:'bg-violet-700 hover:bg-violet-600' },
+  { ring:'border-rose-500',    accent:'text-rose-400',    sliderColor:'#f43f5e', btn:'bg-rose-700 hover:bg-rose-600' },
+  { ring:'border-amber-500',   accent:'text-amber-400',   sliderColor:'#f59e0b', btn:'bg-amber-700 hover:bg-amber-600' },
+  { ring:'border-teal-500',    accent:'text-teal-400',    sliderColor:'#14b8a6', btn:'bg-teal-700 hover:bg-teal-600' },
+  { ring:'border-pink-500',    accent:'text-pink-400',    sliderColor:'#ec4899', btn:'bg-pink-700 hover:bg-pink-600' },
+  { ring:'border-orange-500',  accent:'text-orange-400',  sliderColor:'#f97316', btn:'bg-orange-700 hover:bg-orange-600' },
+];
+function getColor(idx) { return PALETTE[Math.abs(idx) % PALETTE.length]; }
+
+const DEFAULT_TAGS = ['早場', '晚場', '正常', '加碼', '試水溫', '照舊'];
+
+// localStorage keys（本機模式 fallback）
+const SK_LIST    = 'proj_list_v2';
+const SK_DATA    = id => `proj_data_${id}`;
+const SK_RECORDS = 'betting_records';
+const SK_TAGS    = 'note_tags';
+// Supabase config keys（僅存 URL/key，不含資料）
+const SK_SB_URL  = 'sb_url';
+const SK_SB_KEY  = 'sb_anon_key';
+
+// ============================================================
+// ① Supabase 設定與初始化
+// ============================================================
+let sb = null; // Supabase client instance
+
+function getDbConfig() {
+  return { url: localStorage.getItem(SK_SB_URL) || '', key: localStorage.getItem(SK_SB_KEY) || '' };
+}
+
+function initSupabaseClient() {
+  const { url, key } = getDbConfig();
+  if (url && key && window.supabase) {
+    try {
+      sb = window.supabase.createClient(url, key);
+      return true;
+    } catch(e) {
+      console.error('Supabase init error:', e);
+      return false;
+    }
+  }
+  return false;
+}
+
+function isCloud() { return sb !== null; }
+
+// 更新頂部按鈕與 Modal 內的狀態顯示
+function updateDbStatusBadge() {
+  const dot        = document.getElementById('db-status-dot');
+  const text       = document.getElementById('db-status-text');
+  const modalDot   = document.getElementById('modal-status-dot');
+  const modalLabel = document.getElementById('modal-status-label');
+  const btn        = document.getElementById('db-status');
+
+  if (isCloud()) {
+    if (dot)  dot.className  = 'w-2 h-2 rounded-full bg-emerald-400';
+    if (text) text.textContent = '☁️ 雲端同步中';
+    if (btn)  { btn.classList.remove('bg-slate-700','border-slate-600','text-slate-300','hover:bg-slate-600');
+                btn.classList.add('bg-emerald-900','border-emerald-700','text-emerald-300','hover:bg-emerald-800'); }
+    if (modalDot)   modalDot.className   = 'w-3 h-3 rounded-full bg-emerald-400 flex-shrink-0';
+    if (modalLabel) { modalLabel.textContent = '🟢 雲端同步中（已連線 Supabase）';
+                      modalLabel.className = 'text-xs text-emerald-400 mt-0.5'; }
+  } else {
+    if (dot)  dot.className  = 'w-2 h-2 rounded-full bg-slate-500';
+    if (text) text.textContent = '⚙️ 雲端同步設定';
+    if (btn)  { btn.classList.remove('bg-emerald-900','border-emerald-700','text-emerald-300','hover:bg-emerald-800');
+                btn.classList.add('bg-slate-700','border-slate-600','text-slate-300','hover:bg-slate-600'); }
+    if (modalDot)   modalDot.className   = 'w-3 h-3 rounded-full bg-slate-500 flex-shrink-0';
+    if (modalLabel) { modalLabel.textContent = '⚪ 本機儲存模式（尚未連線 Supabase）';
+                      modalLabel.className = 'text-xs text-slate-400 mt-0.5'; }
+  }
+}
+
+// Modal 開啟 / 關閉
+function openDbModal() {
+  const backdrop = document.getElementById('db-modal-backdrop');
+  backdrop.classList.remove('hidden');
+  // 填入已儲存的值
+  const { url, key } = getDbConfig();
+  document.getElementById('cfg-url').value = url;
+  document.getElementById('cfg-key').value = key;
+  // 同步狀態顯示
+  updateDbStatusBadge();
+}
+function closeDbModal() {
+  document.getElementById('db-modal-backdrop').classList.add('hidden');
+}
+// 點擊遮罩關閉（點 Modal 內部不關閉）
+function handleModalBackdropClick(e) {
+  if (e.target === document.getElementById('db-modal-backdrop')) closeDbModal();
+}
+
+function toggleKeyVisibility() {
+  const el  = document.getElementById('cfg-key');
+  const btn = el.nextElementSibling;
+  el.type   = el.type === 'password' ? 'text' : 'password';
+  if (btn) btn.textContent = el.type === 'password' ? '顯示' : '隱藏';
+}
+
+// SQL 一鍵複製
+function copySql() {
+  const sql = document.getElementById('sql-block').textContent;
+  navigator.clipboard.writeText(sql).then(() => {
+    const btn = document.getElementById('copy-sql-btn');
+    btn.textContent = '✅ 已複製';
+    setTimeout(() => { btn.textContent = '📋 複製'; }, 2000);
+  }).catch(() => { showToast('請手動選取 SQL 文字後複製', 'info'); });
+}
+
+async function saveAndConnect() {
+  const url = document.getElementById('cfg-url').value.trim();
+  const key = document.getElementById('cfg-key').value.trim();
+  if (!url || !key) { showToast('請填入 URL 與 Anon Key', 'error'); return; }
+  localStorage.setItem(SK_SB_URL, url);
+  localStorage.setItem(SK_SB_KEY, key);
+  sb = null;
+  if (!initSupabaseClient()) { showToast('⚠️ Supabase 初始化失敗，請確認 URL 與 Key 是否正確', 'error'); return; }
+  showToast('連線中…', 'info');
+  await fetchAll();
+  updateDbStatusBadge();
+  closeDbModal();
+  renderAll();
+  renderOverviewExtras();
+  showToast('✅ 已成功連線雲端資料庫', 'ok');
+}
+
+function disconnectDb() {
+  sb = null;
+  localStorage.removeItem(SK_SB_URL);
+  localStorage.removeItem(SK_SB_KEY);
+  document.getElementById('cfg-url').value = '';
+  document.getElementById('cfg-key').value = '';
+  updateDbStatusBadge();
+  closeDbModal();
+  showToast('已切換回本機儲存模式', 'info');
+}
+
+// ============================================================
+// ② 記憶體快取（所有渲染函數讀此；DB 寫入是非同步附帶）
+// ============================================================
+const cache = {
+  projects: [], // 合併 list + data：{ id, label, colorIdx, sortOrder, initialCapital, currentBalance, sliderPct, manualBet, manualPct }
+  records:  [], // 與原始格式相同
+  tags:     []
+};
+
+// ============================================================
+// ③ 資料層 — Supabase 操作（失敗回退 localStorage）
+// ============================================================
+
+async function fetchAll() {
+  showLoading(true, '正在從雲端讀取資料…');
+  try {
+    if (isCloud()) {
+      const [pRes, rRes, sRes] = await Promise.all([
+        sb.from('projects').select('*').order('sort_order', { ascending: true }),
+        sb.from('betting_records').select('*').order('id', { ascending: false }),
+        sb.from('app_settings').select('value').eq('key', 'note_tags').maybeSingle()
+      ]);
+      if (pRes.error) throw pRes.error;
+      if (rRes.error) throw rRes.error;
+
+      cache.projects = (pRes.data || []).map(dbToProject);
+      cache.records  = (rRes.data || []).map(dbToRecord);
+      cache.tags     = sRes.data?.value || [...DEFAULT_TAGS];
+    } else {
+      loadCacheFromLocalStorage();
+    }
+  } catch(e) {
+    console.error('fetchAll:', e);
+    showToast('⚠️ 雲端讀取失敗，使用本機資料：' + e.message, 'error');
+    loadCacheFromLocalStorage();
+  } finally {
+    showLoading(false);
+  }
+}
+
+// snake_case DB → camelCase JS
+function dbToProject(p) {
+  return { id: p.id, label: p.label, colorIdx: p.color_idx, sortOrder: p.sort_order,
+    initialCapital: p.initial_capital, currentBalance: p.current_balance,
+    sliderPct: p.slider_pct, manualBet: p.manual_bet, manualPct: p.manual_pct };
+}
+function dbToRecord(r) {
+  return { id: r.id, projectId: r.project_id, date: r.date, project: r.project,
+    initBal: r.init_bal, pct: r.pct, bet: r.bet, pnl: r.pnl, afterBal: r.after_bal,
+    status: r.status, note: r.note || '' };
+}
+
+// camelCase JS → snake_case DB row
+function projectToDb(p, sortOrder) {
+  return { id: p.id, label: p.label, color_idx: p.colorIdx,
+    sort_order: sortOrder ?? p.sortOrder ?? 0,
+    initial_capital: p.initialCapital, current_balance: p.currentBalance,
+    slider_pct: p.sliderPct, manual_bet: p.manualBet, manual_pct: p.manualPct };
+}
+function recordToDb(r) {
+  return { id: r.id, project_id: r.projectId || null, date: r.date, project: r.project,
+    init_bal: r.initBal, pct: r.pct, bet: r.bet, pnl: r.pnl ?? null,
+    after_bal: r.afterBal ?? null, status: r.status, note: r.note || '' };
+}
+
+async function db_upsertProject(proj) {
+  const idx = cache.projects.findIndex(p => p.id === proj.id);
+  if (idx >= 0) cache.projects[idx] = { ...cache.projects[idx], ...proj };
+  else          cache.projects.push(proj);
+  if (isCloud()) {
+    const { error } = await sb.from('projects').upsert(projectToDb(proj));
+    if (error) showToast('⚠️ 項目儲存失敗：' + error.message, 'error');
+  } else {
+    writeCacheToLocalStorage();
+  }
+}
+
+async function db_deleteProject(id) {
+  cache.projects = cache.projects.filter(p => p.id !== id);
+  if (isCloud()) {
+    const { error } = await sb.from('projects').delete().eq('id', id);
+    if (error) showToast('⚠️ 項目刪除失敗：' + error.message, 'error');
+  } else {
+    writeCacheToLocalStorage();
+  }
+}
+
+async function db_insertRecord(rec) {
+  cache.records.unshift(rec);
+  if (isCloud()) {
+    const { error } = await sb.from('betting_records').insert(recordToDb(rec));
+    if (error) showToast('⚠️ 紀錄新增失敗：' + error.message, 'error');
+  } else {
+    writeCacheToLocalStorage();
+  }
+}
+
+async function db_updateRecord(rec) {
+  const idx = cache.records.findIndex(r => r.id === rec.id);
+  if (idx >= 0) cache.records[idx] = rec;
+  if (isCloud()) {
+    const { error } = await sb.from('betting_records').update({
+      pnl: rec.pnl ?? null, after_bal: rec.afterBal ?? null,
+      status: rec.status, note: rec.note || ''
+    }).eq('id', rec.id);
+    if (error) showToast('⚠️ 紀錄更新失敗：' + error.message, 'error');
+  } else {
+    writeCacheToLocalStorage();
+  }
+}
+
+async function db_deleteRecord(id) {
+  cache.records = cache.records.filter(r => r.id !== id);
+  if (isCloud()) {
+    const { error } = await sb.from('betting_records').delete().eq('id', id);
+    if (error) showToast('⚠️ 紀錄刪除失敗：' + error.message, 'error');
+  } else {
+    writeCacheToLocalStorage();
+  }
+}
+
+async function db_clearAllRecords() {
+  cache.records = [];
+  if (isCloud()) {
+    // 刪除所有紀錄（使用 neq 條件繞過 Supabase 的全行刪除保護）
+    const { error } = await sb.from('betting_records').delete().gte('id', 0);
+    if (error) showToast('⚠️ 清空失敗：' + error.message, 'error');
+  } else {
+    writeCacheToLocalStorage();
+  }
+}
+
+async function db_saveTags(tags) {
+  cache.tags = tags;
+  if (isCloud()) {
+    const { error } = await sb.from('app_settings').upsert({ key: 'note_tags', value: tags });
+    if (error) showToast('⚠️ 標籤儲存失敗：' + error.message, 'error');
+  } else {
+    localStorage.setItem(SK_TAGS, JSON.stringify(tags));
+  }
+}
+
+// ============================================================
+// LocalStorage fallback（非 Supabase 模式）
+// ============================================================
+function loadCacheFromLocalStorage() {
+  const listRaw = localStorage.getItem(SK_LIST);
+  const list    = listRaw ? JSON.parse(listRaw) : [];
+  cache.projects = list.map((p, i) => {
+    const d = (() => { const r = localStorage.getItem(SK_DATA(p.id)); return r ? JSON.parse(r) : {}; })();
+    return { id: p.id, label: p.label, colorIdx: p.colorIdx ?? 0, sortOrder: i,
+      initialCapital: d.initialCapital || 0, currentBalance: d.currentBalance || 0,
+      sliderPct: d.sliderPct || 5, manualBet: d.manualBet || 0, manualPct: d.manualPct || 0 };
+  });
+  if (cache.projects.length === 0) {
+    // 首次使用：建立預設三個項目
+    ['項目 A','項目 B','項目 C'].forEach((label, i) => {
+      const id = generateId();
+      cache.projects.push({ id, label, colorIdx: i, sortOrder: i,
+        initialCapital:0, currentBalance:0, sliderPct:5, manualBet:0, manualPct:0 });
+    });
+    writeCacheToLocalStorage();
+  }
+  const recRaw   = localStorage.getItem(SK_RECORDS);
+  cache.records  = recRaw ? JSON.parse(recRaw) : [];
+  const tagRaw   = localStorage.getItem(SK_TAGS);
+  cache.tags     = tagRaw ? JSON.parse(tagRaw) : [...DEFAULT_TAGS];
+  if (!tagRaw) localStorage.setItem(SK_TAGS, JSON.stringify(DEFAULT_TAGS));
+}
+
+function writeCacheToLocalStorage() {
+  const list = cache.projects.map(p => ({ id: p.id, label: p.label, colorIdx: p.colorIdx }));
+  localStorage.setItem(SK_LIST, JSON.stringify(list));
+  cache.projects.forEach(p => {
+    localStorage.setItem(SK_DATA(p.id), JSON.stringify({
+      initialCapital: p.initialCapital, currentBalance: p.currentBalance,
+      sliderPct: p.sliderPct, manualBet: p.manualBet, manualPct: p.manualPct
+    }));
+  });
+  localStorage.setItem(SK_RECORDS, JSON.stringify(cache.records));
+  localStorage.setItem(SK_TAGS,    JSON.stringify(cache.tags));
+}
+
+// ============================================================
+// 向後相容的同步存取函數（渲染函數呼叫這些，讀 cache）
+// ============================================================
+function loadProjectList() {
+  return cache.projects.map(p => ({ id: p.id, label: p.label, colorIdx: p.colorIdx }));
+}
+function loadProjectData(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return { initialCapital:0, currentBalance:0, sliderPct:5, manualBet:0, manualPct:0 };
+  return { initialCapital: p.initialCapital, currentBalance: p.currentBalance,
+    sliderPct: p.sliderPct, manualBet: p.manualBet, manualPct: p.manualPct };
+}
+function saveProjectData(id, data) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  db_upsertProject({ ...p, ...data }); // async, fire-and-forget
+}
+function loadRecords() { return [...cache.records]; }
+function loadTags()    { return [...cache.tags]; }
+function saveTags(tags) { db_saveTags(tags); }
+
+// ============================================================
+// ④ 復原（只存兩種操作類型，精準 Supabase sync）
+// ============================================================
+let undoAction = null;
+
+function saveUndo(action) {
+  // action = { type:'confirmBet'|'settleRecord', ... }
+  undoAction = action;
+  document.getElementById('undo-btn').classList.remove('hidden');
+}
+function clearUndo() {
+  undoAction = null;
+  document.getElementById('undo-btn').classList.add('hidden');
+}
+
+async function undoLastAction() {
+  if (!undoAction) { showToast('沒有可復原的操作', 'info'); return; }
+  if (!confirm('確定要復原上一步操作嗎？')) return;
+  const a = undoAction;
+
+  if (a.type === 'confirmBet') {
+    // 還原：把餘額加回、刪除剛建立的 pending 紀錄
+    const p = cache.projects.find(p => p.id === a.projId);
+    if (p) await db_upsertProject({ ...p, currentBalance: a.prevBalance });
+    await db_deleteRecord(a.recordId);
+    const balEl = document.getElementById(`pi-${a.projId}-balance`);
+    if (balEl) balEl.value = a.prevBalance;
+    updatePnlROI(a.projId); updateSuggestBet(a.projId);
+
+  } else if (a.type === 'settleRecord') {
+    // 還原：把餘額改回、把紀錄改回 pending
+    const p = cache.projects.find(p => p.id === a.projId);
+    if (p) await db_upsertProject({ ...p, currentBalance: a.prevBalance });
+    const rec = cache.records.find(r => r.id === a.recordId);
+    if (rec) {
+      rec.status = 'pending'; rec.pnl = null; rec.afterBal = null;
+      await db_updateRecord(rec);
+    }
+    const balEl = document.getElementById(`pi-${a.projId}-balance`);
+    if (balEl) balEl.value = a.prevBalance;
+    updatePnlROI(a.projId); updateSuggestBet(a.projId); drawBalanceChart(a.projId);
+  }
+
+  renderProjectMgmtList(); renderStatsPanel();
+  renderProjectFilter(); renderRecordsTable(getFilteredRecords());
+  clearUndo();
+  showToast('✅ 已復原', 'ok');
+}
+
+// ============================================================
+// ⑤ UI 工具：Toast / Loading
+// ============================================================
+let toastTimer = null;
+function showToast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  const colors = { ok:'bg-emerald-700 text-white', error:'bg-rose-700 text-white', info:'bg-slate-700 text-slate-200' };
+  el.className = `text-sm font-semibold px-4 py-2 rounded-xl shadow-2xl show ${colors[type] || colors.info}`;
+  el.textContent = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+function showLoading(on, msg = '處理中…') {
+  const el = document.getElementById('loading-overlay');
+  document.getElementById('loading-msg').textContent = msg;
+  el.classList.toggle('hidden', !on);
+}
+
+// ============================================================
+// 儲存量資訊（本機模式才有意義）
+// ============================================================
+function renderStorageInfo() {
+  const el = document.getElementById('storage-info');
+  if (!el) return;
+  if (isCloud()) { el.textContent = '☁️ 雲端儲存中'; el.className = 'text-xs text-emerald-500 ml-auto'; return; }
+  let bytes = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    bytes += (localStorage.getItem(localStorage.key(i)) || '').length * 2;
+  }
+  const kb   = (bytes / 1024).toFixed(1);
+  const warn = kb > 4096;
+  el.textContent = `儲存：${kb} KB / ~5 MB${warn ? ' ⚠️' : ''}`;
+  el.className   = `text-xs ml-auto ${warn ? 'text-rose-400 font-bold' : 'text-slate-500'}`;
+}
+
+// ============================================================
+// 顏色選擇器
+// ============================================================
+let selectedColorIdx = 0;
+function renderColorPicker() {
+  const row = document.getElementById('color-picker-row');
+  if (!row) return;
+  row.innerHTML = PALETTE.map((c, i) => `
+    <span class="color-dot ${i===selectedColorIdx?'selected':''}" style="background:${c.sliderColor}" onclick="selectColor(${i})"></span>`).join('');
+}
+function selectColor(idx) { selectedColorIdx = idx; renderColorPicker(); }
+
+// ============================================================
+// 全域頁面狀態
+// ============================================================
+let currentPage = 'overview';
+
+// ============================================================
+// 導覽
+// ============================================================
+function navigateTo(pageId) {
+  currentPage = pageId;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const dom = pageId === 'overview'
+    ? document.getElementById('page-overview')
+    : document.getElementById(`page-proj-${pageId}`);
+  if (dom) dom.classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.page === pageId));
+  if (pageId === 'overview') renderOverviewExtras();
+}
+
+function renderOverviewExtras() {
+  renderOverviewCards();
+  renderProjectMgmtList();
+  renderTagsManageList();
+  renderProjectFilter();
+  renderStatsPanel();
+  renderStorageInfo();
+  renderRecordsTable(loadRecords());
+}
+
+// ============================================================
+// 導覽列
+// ============================================================
+function renderNav() {
+  const nav  = document.getElementById('main-nav');
+  let html = `<button class="nav-btn" data-page="overview" onclick="navigateTo('overview')">📊 總覽</button>`;
+  (loadProjectList()).forEach(p => {
+    html += `<button class="nav-btn" data-page="${p.id}" onclick="navigateTo('${p.id}')">${escHtml(p.label)}</button>`;
+  });
+  nav.innerHTML = html;
+  nav.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.page === currentPage));
+}
+
+// ============================================================
+// 項目管理清單
+// ============================================================
+function renderProjectMgmtList() {
+  const container = document.getElementById('proj-mgmt-list');
+  const list = cache.projects;
+  if (list.length === 0) { container.innerHTML = '<div class="text-xs text-slate-500 text-center py-3">尚無項目</div>'; return; }
+  container.innerHTML = list.map((p, i) => {
+    const c = getColor(p.colorIdx);
+    return `
+    <div class="flex items-center gap-2 bg-slate-700 rounded-lg px-3 py-2 flex-wrap">
+      <span class="w-3 h-3 rounded-full flex-shrink-0" style="background:${c.sliderColor}"></span>
+      <span class="text-xs text-slate-500">#${i+1}</span>
+      <span class="flex-1 text-sm font-semibold truncate min-w-0">${escHtml(p.label)}</span>
+      <span class="text-xs text-slate-400">餘額:&nbsp;${formatNum(p.currentBalance||0)}</span>
+      <button onclick="renameProject('${p.id}')" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-2 py-1 rounded">✏ 改名</button>
+      <button onclick="changeProjectColor('${p.id}')" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-2 py-1 rounded">🎨 換色</button>
+      <button onclick="deleteProject('${p.id}')" class="text-xs bg-red-800 hover:bg-red-700 text-white px-2 py-1 rounded">🗑 刪除</button>
+    </div>`;
+  }).join('');
+}
+
+// ============================================================
+// 總覽投注卡片
+// ============================================================
+function renderOverviewCards() {
+  const container = document.getElementById('ov-cards');
+  const list = cache.projects;
+  if (list.length === 0) {
+    container.innerHTML = '<div class="col-span-full text-xs text-slate-500 text-center py-4">尚無項目</div>';
+    document.getElementById('ov-total').textContent = '0'; return;
+  }
+  let total = 0;
+  container.innerHTML = list.map(p => {
+    const c   = getColor(p.colorIdx);
+    const bal = parseFloat(p.currentBalance) || 0;
+    const mb  = parseFloat(p.manualBet) || 0;
+    const bet = mb > 0 ? mb : (bal * (parseFloat(p.sliderPct)||5) / 100);
+    total += bet;
+    return `<div class="bg-slate-700 rounded-lg p-3 text-center">
+      <div class="text-xs text-slate-400 mb-1 truncate">${escHtml(p.label)}</div>
+      <div class="text-lg font-bold ${c.accent}">${formatNum(bet)}</div>
+      <div class="text-xs text-slate-500 mt-0.5">餘額 ${formatNum(bal)}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('ov-total').textContent = formatNum(total);
+}
+
+// ============================================================
+// 統計面板
+// ============================================================
+function renderStatsPanel() {
+  const el      = document.getElementById('stats-content');
+  if (!el) return;
+  const settled = cache.records.filter(r => r.status === 'settled');
+  if (settled.length === 0) { el.innerHTML = '<div class="text-xs text-slate-500 text-center py-2">尚無已結算紀錄</div>'; return; }
+  const statsMap = {};
+  settled.forEach(r => {
+    if (!statsMap[r.project]) statsMap[r.project] = { wins:0, losses:0, pnl:0, bet:0 };
+    const s = statsMap[r.project];
+    s.bet += r.bet||0; s.pnl += r.pnl||0;
+    if ((r.pnl||0) >= 0) s.wins++; else s.losses++;
+  });
+  let gW=0, gL=0, gP=0, gB=0;
+  Object.values(statsMap).forEach(s => { gW+=s.wins; gL+=s.losses; gP+=s.pnl; gB+=s.bet; });
+  const gT = gW+gL;
+  const cards = Object.entries(statsMap).map(([label, s]) => {
+    const t = s.wins+s.losses, wr = t>0?(s.wins/t*100).toFixed(1):'—';
+    const pColor = (() => { const p = cache.projects.find(x=>x.label===label); return p?getColor(p.colorIdx).sliderColor:'#94a3b8'; })();
+    return `<div class="bg-slate-700 rounded-lg p-3">
+      <div class="flex items-center gap-1.5 mb-2">
+        <span class="w-2.5 h-2.5 rounded-full" style="background:${pColor}"></span>
+        <span class="text-xs font-semibold truncate">${escHtml(label)}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-x-3 text-xs">
+        <span class="text-slate-500">場次</span><span class="font-bold">${t}</span>
+        <span class="text-slate-500">勝/敗</span><span class="font-bold"><span class="text-emerald-400">${s.wins}</span>/<span class="text-rose-400">${s.losses}</span></span>
+        <span class="text-slate-500">勝率</span><span class="font-bold text-sky-300">${wr}%</span>
+        <span class="text-slate-500">損益</span><span class="font-bold ${s.pnl>=0?'positive':'negative'}">${s.pnl>=0?'+':''}${formatNum(s.pnl)}</span>
+      </div>
+      <div class="w-full h-1.5 bg-slate-600 rounded mt-1">
+        <div class="h-1.5 rounded bg-emerald-500" style="width:${t>0?Math.round(s.wins/t*100):0}%"></div>
+      </div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-3">${cards}</div>
+    <div class="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg p-3 flex flex-wrap gap-4 justify-around text-center">
+      <div><div class="text-xs text-slate-400">總場次</div><div class="font-bold text-slate-200">${gT}</div></div>
+      <div><div class="text-xs text-slate-400">整體勝率</div><div class="font-bold text-sky-300">${gT>0?(gW/gT*100).toFixed(1):0}%</div></div>
+      <div><div class="text-xs text-slate-400">整體損益</div><div class="font-bold ${gP>=0?'positive':'negative'}">${gP>=0?'+':''}${formatNum(gP)}</div></div>
+      <div><div class="text-xs text-slate-400">總下注</div><div class="font-bold text-slate-200">${formatNum(gB)}</div></div>
+    </div>`;
+}
+
+// ============================================================
+// 建立項目頁面 HTML
+// ============================================================
+function buildProjectPage(proj) {
+  const id = proj.id, c = getColor(proj.colorIdx);
+  return `
+  <div class="flex items-center gap-2 mb-3">
+    <h2 class="text-lg font-bold ${c.accent}" id="ptitle-${id}">📁 ${escHtml(proj.label)}</h2>
+  </div>
+
+  <div class="bg-slate-800 rounded-xl p-4 mb-4 border ${c.ring}">
+    <h3 class="text-xs text-slate-400 font-semibold mb-3">核心資金數據</h3>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div>
+        <label class="text-xs text-slate-500">初始本金</label>
+        <input type="number" id="pi-${id}-initial" placeholder="0" min="0" inputmode="decimal"
+          class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
+          oninput="onInitialChange('${id}')" />
+      </div>
+      <div>
+        <label class="text-xs text-slate-500">當前餘額</label>
+        <input type="number" id="pi-${id}-balance" placeholder="0" inputmode="decimal"
+          class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
+          oninput="onBalanceChange('${id}')" />
+      </div>
+    </div>
+    <div class="flex justify-between text-xs mb-1"><span class="text-slate-500">累計損益</span><span id="pi-${id}-pnl" class="font-bold">—</span></div>
+    <div class="flex justify-between text-xs"><span class="text-slate-500">報酬率</span><span id="pi-${id}-roi" class="font-bold">—</span></div>
+    <div class="mt-3">
+      <div class="text-xs text-slate-500 mb-1">餘額走勢（近20筆）</div>
+      <canvas id="chart-${id}" width="400" height="60" class="w-full rounded" style="background:#0f172a;"></canvas>
+    </div>
+  </div>
+
+  <div class="bg-slate-800 rounded-xl p-4 mb-4 border border-slate-700">
+    <h3 class="text-xs text-slate-400 font-semibold mb-3">建議投注計算</h3>
+    <div class="mb-3">
+      <div class="flex justify-between text-xs text-slate-500 mb-1">
+        <span>下注比例</span><span id="pi-${id}-pct-label">5%</span>
+      </div>
+      <input type="range" id="pi-${id}-slider" min="0.1" max="100" step="0.1" value="5" style="width:100%;" oninput="onSliderChange('${id}', this.value)" />
+      <div class="flex justify-between text-xs text-slate-600 mt-1"><span>1%</span><span>50%</span><span>100%</span></div>
+    </div>
+    <div class="flex items-center gap-2 mb-3">
+      <label class="text-xs text-slate-500 whitespace-nowrap">直接輸入比例 (%)</label>
+      <input type="number" id="pi-${id}-pct-input" min="0.1" max="100" step="0.1" value="5" inputmode="decimal"
+        class="w-20 bg-slate-700 text-slate-100 px-2 py-1 rounded text-sm border border-slate-600 outline-none focus:border-sky-500"
+        oninput="onPctInputChange('${id}', this.value)" />
+    </div>
+    <div class="bg-slate-900 rounded-lg p-3 flex justify-between items-center">
+      <span class="text-xs text-slate-400">建議下注金額</span>
+      <span id="pi-${id}-suggest" class="text-xl font-bold ${c.accent}">0</span>
+    </div>
+  </div>
+
+  <div class="bg-slate-800 rounded-xl p-4 mb-4 border border-slate-700">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-xs text-slate-400 font-semibold">今日手動下注設定</h3>
+      <span class="text-xs text-slate-600">↑ 調整比例後自動帶入</span>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mb-2">
+      <div>
+        <label class="text-xs text-slate-500">手動下注金額</label>
+        <input type="number" id="pi-${id}-manual-bet" placeholder="自動帶入建議金額" min="0" inputmode="decimal"
+          class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
+          oninput="onManualBetChange('${id}')" />
+      </div>
+      <div>
+        <label class="text-xs text-slate-500">手動比例 (%)</label>
+        <input type="number" id="pi-${id}-manual-pct" placeholder="自動帶入比例" min="0" max="100" step="0.1" inputmode="decimal"
+          class="w-full mt-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
+          oninput="onManualPctChange('${id}')" />
+      </div>
+    </div>
+    <!-- 快速湊整數按鈕 -->
+    <div class="flex gap-2 flex-wrap mt-1">
+      <span class="text-xs text-slate-500 self-center whitespace-nowrap">快速湊整數：</span>
+      <button onclick="roundBet('${id}','100')"
+        class="text-xs bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-600 transition-colors font-medium">
+        四捨五入百位
+      </button>
+      <button onclick="roundBet('${id}','1000')"
+        class="text-xs bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-600 transition-colors font-medium">
+        四捨五入千位
+      </button>
+      <button onclick="roundBet('${id}','floor100')"
+        class="text-xs bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-600 transition-colors font-medium">
+        捨去百位以下
+      </button>
+    </div>
+  </div>
+
+  <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+    <h3 class="text-xs text-slate-400 font-semibold mb-3">📌 第一階段：確認下注</h3>
+    <div class="bg-slate-900 rounded-lg p-3 mb-2 flex justify-between items-center">
+      <span class="text-xs text-slate-400">本次下注金額</span>
+      <span id="pi-${id}-confirm-bet" class="text-xl font-bold ${c.accent}">0</span>
+    </div>
+    <div class="bg-slate-900 rounded-lg p-3 mb-3 flex justify-between items-center text-sm">
+      <span class="text-slate-400">扣除後餘額預覽</span>
+      <span id="pi-${id}-after-bet" class="font-bold text-yellow-300">—</span>
+    </div>
+    <div class="mb-2">
+      <div class="text-xs text-slate-500 mb-1.5">常用備註（點擊快速填入）</div>
+      <div id="pi-${id}-tag-row" class="flex flex-wrap gap-1.5"><span class="text-xs text-slate-600">尚無標籤</span></div>
+    </div>
+    <input type="text" id="pi-${id}-note" placeholder="備註（選填）"
+      class="w-full mb-3 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500" />
+    <button onclick="confirmBet('${id}')" class="w-full ${c.btn} text-white py-3 rounded-xl font-bold text-sm shadow-lg">
+      📌 確認下注（記為待結算）
+    </button>
+    <p class="text-xs text-slate-500 text-center mt-2">確認後到歷史紀錄中點擊【🟢 贏 / 🔴 輸】完成最終結算</p>
+  </div>`;
+}
+
+// ============================================================
+// 渲染 / 移除項目頁面
+// ============================================================
+function renderProjectPages() {
+  const container  = document.getElementById('dynamic-pages');
+  const currentIds = new Set(cache.projects.map(p => p.id));
+  Array.from(container.querySelectorAll('[id^="page-proj-"]')).forEach(el => {
+    if (!currentIds.has(el.id.replace('page-proj-',''))) el.remove();
+  });
+  cache.projects.forEach(proj => {
+    if (!document.getElementById(`page-proj-${proj.id}`)) {
+      const div = document.createElement('div');
+      div.id = `page-proj-${proj.id}`; div.className = 'page';
+      div.innerHTML = buildProjectPage(proj);
+      container.appendChild(div);
+      loadProjectDataToUI(proj.id);
+    }
+  });
+}
+
+function renderAll() {
+  renderProjectPages();
+  renderNav();
+  const exists = currentPage === 'overview' || cache.projects.some(p => p.id === currentPage);
+  navigateTo(exists ? currentPage : 'overview');
+}
+
+// ============================================================
+// 項目管理 CRUD
+// ============================================================
+async function addProject() {
+  const nameEl = document.getElementById('new-proj-name');
+  const capEl  = document.getElementById('new-proj-capital');
+  const label  = nameEl.value.trim();
+  const cap    = parseFloat(capEl.value) || 0;
+  if (!label) { showToast('請輸入項目名稱！', 'error'); nameEl.focus(); return; }
+  if (cache.projects.some(p => p.label === label)) { showToast(`「${label}」已存在`, 'error'); return; }
+  const id = generateId();
+  const newProj = { id, label, colorIdx: selectedColorIdx, sortOrder: cache.projects.length,
+    initialCapital: cap, currentBalance: cap, sliderPct:5, manualBet:0, manualPct:0 };
+  await db_upsertProject(newProj);
+  nameEl.value = ''; capEl.value = '';
+  selectedColorIdx = (selectedColorIdx + 1) % PALETTE.length;
+  renderColorPicker();
+  renderAll();
+  showToast(`✅ 已新增「${label}」`, 'ok');
+}
+
+async function deleteProject(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  if (!confirm(`確定要刪除「${p.label}」嗎？\n• 資金數據將永久移除\n• 歷史紀錄保留`)) return;
+  await db_deleteProject(id);
+  if (currentPage === id) currentPage = 'overview';
+  renderAll();
+  showToast(`已刪除「${p.label}」`, 'info');
+}
+
+async function renameProject(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  const newLabel = prompt(`請輸入「${p.label}」的新名稱：`, p.label)?.trim();
+  if (!newLabel) return;
+  if (cache.projects.some(x => x.id !== id && x.label === newLabel)) { showToast(`「${newLabel}」已存在`, 'error'); return; }
+  p.label = newLabel;
+  await db_upsertProject(p);
+  const titleEl = document.getElementById(`ptitle-${id}`);
+  if (titleEl) titleEl.innerHTML = `📁 ${escHtml(newLabel)}`;
+  renderNav(); renderProjectMgmtList(); renderOverviewCards(); renderProjectFilter();
+  showToast(`已重新命名為「${newLabel}」`, 'ok');
+}
+
+async function changeProjectColor(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  const names = ['綠','藍','紫','紅','橙','青','粉','橙紅'];
+  const input = prompt(`輸入顏色編號（1-8）\n${PALETTE.map((c,i)=>`[${i+1}]${names[i]}`).join('  ')}\n目前：${names[p.colorIdx%8]}`, (p.colorIdx%8)+1);
+  if (input === null) return;
+  const idx = parseInt(input) - 1;
+  if (idx < 0 || idx >= PALETTE.length) { showToast('請輸入 1-8', 'error'); return; }
+  p.colorIdx = idx;
+  await db_upsertProject(p);
+  const pageEl = document.getElementById(`page-proj-${id}`);
+  if (pageEl) { pageEl.innerHTML = buildProjectPage(p); loadProjectDataToUI(id); }
+  renderNav(); renderProjectMgmtList(); renderOverviewCards();
+}
+
+// ============================================================
+// 載入項目數據到 UI
+// ============================================================
+function loadProjectDataToUI(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  const g = s => document.getElementById(s);
+  if (!g(`pi-${id}-initial`)) return;
+  g(`pi-${id}-initial`).value   = p.initialCapital || '';
+  g(`pi-${id}-balance`).value   = p.currentBalance || '';
+  g(`pi-${id}-pct-input`).value = p.sliderPct || 5;
+  const mb = g(`pi-${id}-manual-bet`); if (mb) mb.value = p.manualBet || '';
+  const mp = g(`pi-${id}-manual-pct`); if (mp) mp.value = p.manualPct || '';
+  updateSliderUI(id, p.sliderPct || 5);
+  updateSuggestBet(id);
+  updatePnlROI(id);
+  drawBalanceChart(id);
+  renderProjectPageTags(id);
+}
+
+function updateSuggestBet(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  const bal     = parseFloat(p.currentBalance) || 0;
+  const pct     = parseFloat(p.sliderPct) || 5;
+  const suggest = round2(bal * pct / 100);
+
+  // 建議金額顯示
+  const sEl = document.getElementById(`pi-${id}-suggest`);
+  if (sEl) sEl.textContent = formatNum(suggest);
+
+  // 自動帶入手動下注欄位（讓使用者可直接在此湊整數）
+  const mbEl = document.getElementById(`pi-${id}-manual-bet`);
+  const mpEl = document.getElementById(`pi-${id}-manual-pct`);
+  if (mbEl) mbEl.value = suggest;
+  if (mpEl) mpEl.value = pct;
+  // 同步 cache（以便 confirmBet 讀取正確值）
+  p.manualBet = suggest;
+  p.manualPct = pct;
+
+  // 確認下注區的有效金額與餘額預覽
+  const eff = suggest; // 帶入後直接使用建議值
+  const cEl = document.getElementById(`pi-${id}-confirm-bet`);
+  const aEl = document.getElementById(`pi-${id}-after-bet`);
+  if (cEl) cEl.textContent = formatNum(eff);
+  if (aEl) {
+    const afterAmt = bal - eff;
+    aEl.textContent = formatNum(afterAmt);
+    aEl.className = `font-bold ${afterAmt >= 0 ? 'text-yellow-300' : 'text-red-400'}`;
+  }
+  if (currentPage === 'overview') renderOverviewCards();
+}
+
+function updateSliderUI(id, val) {
+  const p = cache.projects.find(p => p.id === id);
+  const color = p ? getColor(p.colorIdx).sliderColor : '#0ea5e9';
+  const sl = document.getElementById(`pi-${id}-slider`);
+  const lb = document.getElementById(`pi-${id}-pct-label`);
+  if (!sl) return;
+  sl.value = val;
+  sl.style.background = `linear-gradient(to right, ${color} ${val}%, #334155 ${val}%)`;
+  if (lb) lb.textContent = `${val}%`;
+}
+
+function updatePnlROI(id) {
+  const p = cache.projects.find(p => p.id === id);
+  const pnlEl = document.getElementById(`pi-${id}-pnl`);
+  const roiEl = document.getElementById(`pi-${id}-roi`);
+  if (!pnlEl || !p) return;
+  const init = parseFloat(p.initialCapital) || 0;
+  const bal  = parseFloat(p.currentBalance) || 0;
+  if (init === 0) { pnlEl.textContent = '—'; if (roiEl) roiEl.textContent = '—'; return; }
+  const pnl = bal - init, roi = ((pnl/init)*100).toFixed(2);
+  pnlEl.textContent = (pnl>=0?'+':'') + formatNum(pnl);
+  pnlEl.className   = `font-bold ${pnl>=0?'positive':'negative'}`;
+  if (roiEl) { roiEl.textContent = `${roi}%`; roiEl.className = pnlEl.className; }
+}
+
+// ============================================================
+// 餘額走勢圖
+// ============================================================
+function drawBalanceChart(id) {
+  const canvas = document.getElementById(`chart-${id}`);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const recs = cache.records
+    .filter(r => r.projectId === id && r.status === 'settled' && r.afterBal !== null)
+    .slice(0, 20).reverse();
+  if (recs.length < 2) {
+    ctx.fillStyle = '#334155'; ctx.font = '11px sans-serif';
+    ctx.fillText('結算 2 筆後顯示走勢圖', 10, H/2 + 4); return;
+  }
+  const vals = recs.map(r => r.afterBal);
+  const minV = Math.min(...vals), maxV = Math.max(...vals), range = maxV - minV || 1;
+  const pad = 6;
+  const toX = i => pad + (i / (vals.length-1)) * (W-pad*2);
+  const toY = v => H - pad - ((v-minV)/range) * (H-pad*2);
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(14,165,233,0.3)'); grad.addColorStop(1, 'rgba(14,165,233,0)');
+  ctx.beginPath(); ctx.moveTo(toX(0), H);
+  vals.forEach((v,i) => ctx.lineTo(toX(i), toY(v)));
+  ctx.lineTo(toX(vals.length-1), H); ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath();
+  vals.forEach((v,i) => i===0 ? ctx.moveTo(toX(i),toY(v)) : ctx.lineTo(toX(i),toY(v)));
+  ctx.strokeStyle = '#0ea5e9'; ctx.lineWidth = 1.5; ctx.stroke();
+  const lx = toX(vals.length-1), ly = toY(vals[vals.length-1]);
+  ctx.beginPath(); ctx.arc(lx,ly,3,0,Math.PI*2); ctx.fillStyle='#0ea5e9'; ctx.fill();
+}
+
+// ============================================================
+// 事件處理
+// ============================================================
+function onInitialChange(id) {
+  const val = parseFloat(document.getElementById(`pi-${id}-initial`).value) || 0;
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  p.initialCapital = val;
+  if (!p.currentBalance) { p.currentBalance = val; document.getElementById(`pi-${id}-balance`).value = val; }
+  db_upsertProject(p);
+  updatePnlROI(id); updateSuggestBet(id);
+}
+function onBalanceChange(id) {
+  const val = parseFloat(document.getElementById(`pi-${id}-balance`).value) || 0;
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  p.currentBalance = val;
+  if (p.manualPct) { p.manualBet = round2(val * p.manualPct / 100); const el = document.getElementById(`pi-${id}-manual-bet`); if (el) el.value = p.manualBet; }
+  db_upsertProject(p);
+  updatePnlROI(id); updateSuggestBet(id);
+}
+function onSliderChange(id, val) {
+  val = parseFloat(val);
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  p.sliderPct = val; db_upsertProject(p);
+  const pi = document.getElementById(`pi-${id}-pct-input`); if (pi) pi.value = val;
+  updateSliderUI(id, val); updateSuggestBet(id);
+}
+function onPctInputChange(id, val) {
+  val = Math.min(100, Math.max(0.1, parseFloat(val) || 0.1));
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  p.sliderPct = val; db_upsertProject(p);
+  updateSliderUI(id, val); updateSuggestBet(id);
+}
+function onManualBetChange(id) {
+  const bet = parseFloat(document.getElementById(`pi-${id}-manual-bet`).value) || 0;
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  const bal = parseFloat(p.currentBalance) || 0;
+  p.manualBet = bet;
+  if (bal > 0) { p.manualPct = round2(bet/bal*100); const el = document.getElementById(`pi-${id}-manual-pct`); if (el) el.value = p.manualPct; }
+  db_upsertProject(p);
+  // 同步確認下注區顯示（不呼叫 updateSuggestBet 避免覆蓋使用者手動輸入的值）
+  const cEl = document.getElementById(`pi-${id}-confirm-bet`);
+  const aEl = document.getElementById(`pi-${id}-after-bet`);
+  if (cEl) cEl.textContent = formatNum(bet);
+  if (aEl) {
+    const afterAmt = bal - bet;
+    aEl.textContent = formatNum(afterAmt);
+    aEl.className = `font-bold ${afterAmt >= 0 ? 'text-yellow-300' : 'text-red-400'}`;
+  }
+  if (currentPage === 'overview') renderOverviewCards();
+}
+function onManualPctChange(id) {
+  const pct = parseFloat(document.getElementById(`pi-${id}-manual-pct`).value) || 0;
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  const bal = parseFloat(p.currentBalance) || 0;
+  p.manualPct = pct; p.manualBet = round2(bal * pct / 100);
+  const el = document.getElementById(`pi-${id}-manual-bet`); if (el) el.value = p.manualBet;
+  db_upsertProject(p);
+  // 同步確認下注區顯示（不呼叫 updateSuggestBet 避免覆蓋手動值）
+  const eff = p.manualBet;
+  const cEl = document.getElementById(`pi-${id}-confirm-bet`);
+  const aEl = document.getElementById(`pi-${id}-after-bet`);
+  if (cEl) cEl.textContent = formatNum(eff);
+  if (aEl) {
+    const afterAmt = bal - eff;
+    aEl.textContent = formatNum(afterAmt);
+    aEl.className = `font-bold ${afterAmt >= 0 ? 'text-yellow-300' : 'text-red-400'}`;
+  }
+  if (currentPage === 'overview') renderOverviewCards();
+}
+
+// ============================================================
+// 快速湊整數（百位四捨五入 / 千位四捨五入 / 捨去百位以下）
+// ============================================================
+function roundBet(id, mode) {
+  const mbEl = document.getElementById(`pi-${id}-manual-bet`);
+  if (!mbEl) return;
+  const cur = parseFloat(mbEl.value) || 0;
+  if (cur <= 0) return;
+
+  let rounded;
+  if (mode === '100') {
+    // 四捨五入到百位：4380 → 4400，4349 → 4300
+    rounded = Math.round(cur / 100) * 100;
+  } else if (mode === '1000') {
+    // 四捨五入到千位：4380 → 4000，4600 → 5000
+    rounded = Math.round(cur / 1000) * 1000;
+  } else if (mode === 'floor100') {
+    // 無條件捨去百位以下：4380 → 4300，5823 → 5800
+    rounded = Math.floor(cur / 100) * 100;
+  } else {
+    return;
+  }
+  rounded = Math.max(0, rounded);
+
+  // 更新輸入框
+  mbEl.value = rounded;
+
+  // 反推比例並同步 cache
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  const bal = parseFloat(p.currentBalance) || 0;
+  p.manualBet = rounded;
+  p.manualPct = bal > 0 ? round2(rounded / bal * 100) : 0;
+  const mpEl = document.getElementById(`pi-${id}-manual-pct`);
+  if (mpEl) mpEl.value = p.manualPct;
+
+  // 同步確認下注區顯示
+  const cEl = document.getElementById(`pi-${id}-confirm-bet`);
+  const aEl = document.getElementById(`pi-${id}-after-bet`);
+  if (cEl) cEl.textContent = formatNum(rounded);
+  if (aEl) {
+    const afterAmt = bal - rounded;
+    aEl.textContent = formatNum(afterAmt);
+    aEl.className = `font-bold ${afterAmt >= 0 ? 'text-yellow-300' : 'text-red-400'}`;
+  }
+  db_upsertProject(p);
+  if (currentPage === 'overview') renderOverviewCards();
+}
+
+// ============================================================
+// 第一階段：確認下注
+// ============================================================
+async function confirmBet(id) {
+  const p = cache.projects.find(p => p.id === id);
+  if (!p) return;
+  const bal  = parseFloat(p.currentBalance) || 0;
+  const note = document.getElementById(`pi-${id}-note`).value.trim();
+  const mb   = parseFloat(p.manualBet) || 0;
+  const sb2  = round2(bal * (parseFloat(p.sliderPct)||5) / 100);
+  const actualBet = mb > 0 ? mb : sb2;
+  const usedPct   = mb > 0 ? (p.manualPct||0) : (p.sliderPct||5);
+  if (actualBet <= 0) { showToast('下注金額必須大於 0！', 'error'); return; }
+  if (actualBet > bal && !confirm(`下注額（${formatNum(actualBet)}）大於餘額（${formatNum(bal)}），確定？`)) return;
+
+  const prevBalance   = bal;
+  const balAfterBet   = round2(bal - actualBet);
+  p.currentBalance = balAfterBet; p.manualBet = 0; p.manualPct = 0;
+
+  const record = {
+    id: Date.now(), projectId: id, date: getTodayStr(), project: p.label,
+    initBal: bal, pct: usedPct, bet: actualBet,
+    pnl: null, afterBal: null, status: 'pending', note
+  };
+
+  saveUndo({ type: 'confirmBet', projId: id, prevBalance, recordId: record.id });
+
+  await db_upsertProject(p);
+  await db_insertRecord(record);
+
+  document.getElementById(`pi-${id}-balance`).value = balAfterBet;
+  document.getElementById(`pi-${id}-note`).value    = '';
+  const mb2 = document.getElementById(`pi-${id}-manual-bet`); if (mb2) mb2.value = '';
+  const mp2 = document.getElementById(`pi-${id}-manual-pct`); if (mp2) mp2.value = '';
+  updatePnlROI(id); updateSuggestBet(id); renderProjectMgmtList();
+
+  navigateTo('overview');
+  showToast(`📌 下注確認！${p.label}：${formatNum(actualBet)}`, 'ok');
+}
+
+// ============================================================
+// 第二階段：贏/輸結算
+// ============================================================
+async function settleRecord(recordId, type) {
+  const rec = cache.records.find(r => r.id === recordId);
+  if (!rec) { showToast('找不到紀錄', 'error'); return; }
+  if (rec.status !== 'pending') { showToast('此筆已結算', 'info'); return; }
+  const p = rec.projectId ? cache.projects.find(p => p.id === rec.projectId) : null;
+
+  if (type === 'win') {
+    const input = prompt(
+      `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【獲利金額】\n（Enter = 等於下注額）：`, rec.bet);
+    if (input === null) return;
+    const profit = parseFloat(input);
+    if (isNaN(profit) || profit < 0) { showToast('請輸入有效金額', 'error'); return; }
+
+    const prevBalance = p ? parseFloat(p.currentBalance) : null;
+    saveUndo({ type: 'settleRecord', projId: rec.projectId, prevBalance, recordId });
+
+    rec.pnl = round2(profit); rec.afterBal = round2(rec.initBal + profit); rec.status = 'settled';
+    await db_updateRecord(rec);
+    if (p) {
+      p.currentBalance = round2((parseFloat(p.currentBalance)||0) + rec.bet + profit);
+      await db_upsertProject(p);
+      const balEl = document.getElementById(`pi-${p.id}-balance`);
+      if (balEl) balEl.value = p.currentBalance;
+      updatePnlROI(p.id); updateSuggestBet(p.id); drawBalanceChart(p.id);
+    }
+  } else {
+    if (!confirm(`確定【🔴 輸（損）】？\n${rec.project}　損失：${formatNum(rec.bet)}`)) return;
+    const prevBalance = p ? parseFloat(p.currentBalance) : null;
+    saveUndo({ type: 'settleRecord', projId: rec.projectId, prevBalance, recordId });
+    rec.pnl = round2(-rec.bet); rec.afterBal = round2(rec.initBal - rec.bet); rec.status = 'settled';
+    await db_updateRecord(rec);
+    if (p) drawBalanceChart(p.id);
+  }
+
+  renderProjectMgmtList(); renderStatsPanel(); renderStorageInfo();
+  renderRecordsTable(getFilteredRecords());
+  showToast(type === 'win' ? `✅ 贏！+${formatNum(rec.pnl)}` : `❌ 輸 -${formatNum(rec.bet)}`, type==='win'?'ok':'error');
+}
+
+// ============================================================
+// 歷史紀錄表格（含逾期警示）
+// ============================================================
+function renderRecordsTable(records) {
+  const tbody = document.getElementById('records-tbody');
+  if (!tbody) return;
+  if (records.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-slate-500 py-6">尚無紀錄</td></tr>'; return;
+  }
+  const today = getTodayStr();
+  tbody.innerHTML = records.map(r => {
+    const isPending = r.status === 'pending';
+    const isOverdue = isPending && r.date < today;
+    const pnlCell = isPending
+      ? `<td><span class="text-xs font-bold ${isOverdue?'text-rose-400 bg-rose-900/40':'text-amber-400 bg-amber-900/40'} px-2 py-0.5 rounded">${isOverdue?'⚠️ 逾期':'⏳ 待結算'}</span></td>`
+      : `<td class="${r.pnl>=0?'positive':'negative'} font-semibold">${r.pnl>=0?'+':''}${formatNum(r.pnl)}</td>`;
+    const afterBalCell = isPending
+      ? `<td class="text-slate-500 text-xs">—</td>`
+      : `<td class="font-semibold">${formatNum(r.afterBal)}</td>`;
+    const actionCell = isPending
+      ? `<td><div class="flex gap-1 flex-wrap">
+           <button onclick="settleRecord(${r.id},'win')"  class="text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-1 rounded">🟢 贏</button>
+           <button onclick="settleRecord(${r.id},'loss')" class="text-xs font-bold bg-rose-700 hover:bg-rose-600 text-white px-2 py-1 rounded">🔴 輸</button>
+           <button onclick="deleteRecord(${r.id})"        class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-300 px-2 py-1 rounded">✕</button>
+         </div></td>`
+      : `<td><span class="text-xs text-emerald-500 mr-1">✅</span><button onclick="deleteRecord(${r.id})" class="text-xs bg-red-800 hover:bg-red-700 text-white px-2 py-0.5 rounded">刪除</button></td>`;
+    return `<tr class="${isOverdue?'bg-rose-950/20':isPending?'bg-amber-950/20':''}">
+      <td class="text-slate-300 whitespace-nowrap">${r.date}</td>
+      <td><span class="text-xs px-2 py-0.5 rounded bg-slate-600">${escHtml(r.project)}</span></td>
+      <td>${formatNum(r.initBal)}</td><td>${r.pct}%</td>
+      <td class="font-bold text-sky-300">${formatNum(r.bet)}</td>
+      ${pnlCell}${afterBalCell}${actionCell}
+    </tr>`;
+  }).join('');
+}
+
+async function deleteRecord(id) {
+  if (!confirm('確定要刪除這筆紀錄嗎？')) return;
+  await db_deleteRecord(id);
+  renderRecordsTable(getFilteredRecords()); renderStatsPanel();
+}
+
+async function clearAllRecords() {
+  if (!confirm('⚠️ 確定要清空全部紀錄嗎？此操作無法復原！')) return;
+  await db_clearAllRecords();
+  renderRecordsTable([]); renderStatsPanel();
+  showToast('已清空全部紀錄', 'info');
+}
+
+// ============================================================
+// 項目篩選
+// ============================================================
+function renderProjectFilter() {
+  const sel = document.getElementById('filter-project'); if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">全部項目</option>';
+  const fromList    = cache.projects.map(p => p.label);
+  const fromRecords = [...new Set(cache.records.map(r => r.project))];
+  [...new Set([...fromList, ...fromRecords])].forEach(label => {
+    const opt = document.createElement('option');
+    opt.value = label;
+    opt.textContent = fromList.includes(label) ? label : label + ' (已刪除)';
+    sel.appendChild(opt);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+function getFilteredRecords() {
+  const start = document.getElementById('filter-start').value;
+  const end   = document.getElementById('filter-end').value;
+  const proj  = document.getElementById('filter-project').value;
+  let rec = cache.records;
+  if (start) rec = rec.filter(r => r.date >= start);
+  if (end)   rec = rec.filter(r => r.date <= end);
+  if (proj)  rec = rec.filter(r => r.project === proj);
+  return rec;
+}
+function filterRecords() { renderRecordsTable(getFilteredRecords()); }
+function resetFilter() {
+  document.getElementById('filter-start').value = '';
+  document.getElementById('filter-end').value   = '';
+  document.getElementById('filter-project').value = '';
+  renderRecordsTable(cache.records);
+}
+
+// ============================================================
+// 常用備註標籤
+// ============================================================
+async function addNoteTag() {
+  const input = document.getElementById('new-tag-input');
+  const text  = input.value.trim();
+  if (!text) return;
+  const tags = cache.tags;
+  if (tags.includes(text)) { showToast(`「${text}」已存在`, 'error'); return; }
+  tags.push(text);
+  await db_saveTags(tags);
+  input.value = '';
+  renderTagsManageList(); refreshAllProjectTags();
+}
+async function deleteNoteTag(idx) {
+  const tags = cache.tags;
+  tags.splice(idx, 1);
+  await db_saveTags(tags);
+  renderTagsManageList(); refreshAllProjectTags();
+}
+function clickNoteTag(projId, text) {
+  const input = document.getElementById(`pi-${projId}-note`);
+  if (!input) return;
+  const cur = input.value.trim();
+  input.value = cur ? cur + '、' + text : text;
+  input.focus();
+}
+function renderTagsManageList() {
+  const container = document.getElementById('tags-manage-list'); if (!container) return;
+  const tags = cache.tags;
+  if (tags.length === 0) { container.innerHTML = '<span class="text-xs text-slate-500">尚無標籤</span>'; return; }
+  container.innerHTML = tags.map((tag, i) => `
+    <span class="inline-flex items-center gap-1 bg-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded-full">
+      ${escHtml(tag)}
+      <button onclick="deleteNoteTag(${i})" class="text-slate-400 hover:text-rose-400 text-sm font-bold leading-none ml-0.5">×</button>
+    </span>`).join('');
+}
+function renderProjectPageTags(projId) {
+  const container = document.getElementById(`pi-${projId}-tag-row`); if (!container) return;
+  const tags = cache.tags;
+  if (tags.length === 0) { container.innerHTML = '<span class="text-xs text-slate-600">尚無標籤</span>'; return; }
+  container.innerHTML = tags.map(tag => `
+    <button onclick="clickNoteTag('${projId}', '${escHtml(tag).replace(/'/g,"&#39;")}')"
+      class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded-full border border-slate-600 transition-colors">
+      ${escHtml(tag)}
+    </button>`).join('');
+}
+function refreshAllProjectTags() {
+  cache.projects.forEach(p => renderProjectPageTags(p.id));
+}
+
+// ============================================================
+// 匯出 JSON
+// ============================================================
+function exportJSON() {
+  const projectData = {};
+  cache.projects.forEach(p => {
+    projectData[p.id] = { initialCapital: p.initialCapital, currentBalance: p.currentBalance,
+      sliderPct: p.sliderPct, manualBet: p.manualBet, manualPct: p.manualPct };
+  });
+  const list = cache.projects.map(p => ({ id: p.id, label: p.label, colorIdx: p.colorIdx }));
+  downloadFile(
+    JSON.stringify({ exportDate: new Date().toISOString(), version:2,
+      projectList: list, projectData, records: cache.records, noteTags: cache.tags }, null, 2),
+    `betting_backup_${getTodayStr()}.json`, 'application/json');
+}
+
+// ============================================================
+// 匯出 CSV（含統計摘要）
+// ============================================================
+function exportCSV() {
+  const records = cache.records;
+  const header  = '日期,項目,初始餘額,比例%,下注額,損益,結算後餘額,狀態,備註\n';
+  const rows    = records.map(r =>
+    `${r.date},"${escCsv(r.project)}",${r.initBal},${r.pct},${r.bet},${r.pnl??''},${r.afterBal??''},"${r.status==='pending'?'待結算':'已結算'}","${(r.note||'').replace(/"/g,'""')}"`
+  ).join('\n');
+  const settled = records.filter(r => r.status === 'settled');
+  const statsMap = {};
+  settled.forEach(r => {
+    if (!statsMap[r.project]) statsMap[r.project] = {wins:0,losses:0,pnl:0,bet:0};
+    const s = statsMap[r.project]; s.bet+=r.bet||0; s.pnl+=r.pnl||0;
+    if ((r.pnl||0)>=0) s.wins++; else s.losses++;
+  });
+  let summary = '\n\n-- 統計摘要 --\n項目,場次,勝,敗,勝率,累積損益,總下注\n';
+  Object.entries(statsMap).forEach(([label, s]) => {
+    const t = s.wins+s.losses, wr = t>0?(s.wins/t*100).toFixed(1)+'%':'—';
+    summary += `"${escCsv(label)}",${t},${s.wins},${s.losses},${wr},${round2(s.pnl)},${round2(s.bet)}\n`;
+  });
+  downloadFile('﻿' + header + rows + summary, `betting_records_${getTodayStr()}.csv`, 'text/csv');
+}
+
+// ============================================================
+// 匯入 JSON（v1 / v2 格式，同步至 Supabase）
+// ============================================================
+async function importData(event) {
+  const file = event.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      showLoading(true, '正在匯入資料…');
+      if (data.version === 2 && data.projectList) {
+        // 清空 cache 並重建
+        cache.projects = data.projectList.map((p, i) => {
+          const d = (data.projectData || {})[p.id] || {};
+          return { id:p.id, label:p.label, colorIdx:p.colorIdx??0, sortOrder:i,
+            initialCapital:d.initialCapital||0, currentBalance:d.currentBalance||0,
+            sliderPct:d.sliderPct||5, manualBet:0, manualPct:0 };
+        });
+        cache.records = data.records || [];
+        cache.tags    = data.noteTags || [...DEFAULT_TAGS];
+      } else if (data.projects) {
+        cache.projects = []; let i = 0;
+        for (const key of ['A','B','C']) {
+          if (!data.projects[key]) continue;
+          const old = data.projects[key], id = generateId();
+          cache.projects.push({ id, label: old.label||`項目 ${key}`, colorIdx:i, sortOrder:i++,
+            initialCapital:old.initialCapital||0, currentBalance:old.currentBalance||0,
+            sliderPct:old.sliderPct||5, manualBet:0, manualPct:0 });
+        }
+        cache.records = data.records || [];
+        cache.tags    = [...DEFAULT_TAGS];
+      } else { throw new Error('無法識別格式'); }
+
+      if (isCloud()) {
+        // 同步至 Supabase
+        for (const p of cache.projects) await db_upsertProject(p);
+        for (const r of cache.records) {
+          const { error } = await sb.from('betting_records').upsert(recordToDb(r));
+          if (error) console.warn('record upsert:', error);
+        }
+        await db_saveTags(cache.tags);
+      } else {
+        writeCacheToLocalStorage();
+      }
+
+      showLoading(false);
+      currentPage = 'overview';
+      renderAll(); renderOverviewExtras();
+      showToast('✅ 匯入成功！', 'ok');
+    } catch (err) { showLoading(false); showToast('❌ 匯入失敗：' + err.message, 'error'); }
+  };
+  reader.readAsText(file, 'UTF-8');
+  event.target.value = '';
+}
+
+// ============================================================
+// 懸浮計算機
+// ============================================================
+let calcVisible = false, calcExpr = '', calcVal = '0', calcNewEntry = true;
+function toggleCalc() {
+  calcVisible = !calcVisible;
+  document.getElementById('calc-panel').classList.toggle('hidden-calc', !calcVisible);
+}
+function switchCalcMode(mode) {
+  const on  = 'flex-1 py-2 text-xs font-semibold bg-sky-700 text-white';
+  const off = 'flex-1 py-2 text-xs font-semibold bg-slate-700 text-slate-300';
+  document.getElementById('calc-std').classList.toggle('hidden', mode!=='std');
+  document.getElementById('calc-compound').classList.toggle('hidden', mode!=='compound');
+  document.getElementById('btn-std').className      = mode==='std'?on:off;
+  document.getElementById('btn-compound').className = mode==='std'?off:on;
+}
+function calcAction(action) {
+  const display = document.getElementById('calc-display');
+  const exprEl  = document.getElementById('calc-expr');
+  if (action==='AC') { calcVal='0'; calcExpr=''; calcNewEntry=true; }
+  else if (action==='back') { calcVal=calcVal.length>1?calcVal.slice(0,-1):'0'; }
+  else if (action==='=') {
+    try { calcExpr=calcVal; const safe=calcVal.replace(/[^0-9+\-*/.()]/g,'');
+      calcVal=String(round6(Function('"use strict"; return ('+safe+')')())); calcNewEntry=true;
+    } catch { calcVal='Error'; }
+  } else if (['+','-','*','/'].includes(action)) { calcVal+=action; calcNewEntry=false; }
+  else if (action==='%') {
+    try { const safe=calcVal.replace(/[^0-9+\-*/.()]/g,'');
+      calcVal=String(round6(Function('"use strict"; return ('+safe+')')() / 100));
+    } catch { calcVal='Error'; }
+  } else {
+    if (calcNewEntry&&/[0-9]/.test(action)) { calcVal=action; calcNewEntry=false; }
+    else { if (action==='.'&&calcVal.split(/[+\-*/]/).pop().includes('.')) return; calcVal+=action; }
+  }
+  display.textContent=calcVal; exprEl.textContent=calcExpr;
+}
+function calcCompound() {
+  const p=parseFloat(document.getElementById('cp-principal').value);
+  const r=parseFloat(document.getElementById('cp-rate').value);
+  const n=parseInt(document.getElementById('cp-periods').value);
+  if (isNaN(p)||isNaN(r)||isNaN(n)||n<=0) { showToast('請填入有效的本金、報酬率與期數','error'); return; }
+  if (n>1000) { showToast('期數上限 1000','error'); return; }
+  const resultEl=document.getElementById('compound-result');
+  resultEl.classList.remove('hidden');
+  let balance=p; const rows=[];
+  for (let i=1;i<=n;i++) {
+    const earning=round2(balance*r/100); balance=round2(balance+earning);
+    rows.push({i,earning,balance,totalRoi:((balance-p)/p*100).toFixed(2)});
+  }
+  const fp=round2(balance-p);
+  resultEl.innerHTML=`
+    <div class="p-3 border-b border-slate-700">
+      <div class="flex justify-between items-baseline mb-1"><span class="text-xs text-slate-400">本金</span><span class="text-sm font-bold text-slate-200">${formatNum(p)}</span></div>
+      <div class="flex justify-between items-baseline mb-1"><span class="text-xs text-slate-400">最終金額</span><span class="text-xl font-bold text-yellow-300">${formatNum(balance)}</span></div>
+      <div class="flex justify-between items-baseline mb-1"><span class="text-xs text-slate-400">總獲利</span><span class="text-base font-bold positive">+${formatNum(fp)}</span></div>
+      <div class="flex justify-between items-baseline"><span class="text-xs text-slate-400">累積報酬率</span><span class="text-base font-bold positive">+${((fp/p)*100).toFixed(2)}%</span></div>
+    </div>
+    <div style="max-height:260px;overflow-y:auto;">
+      <table style="font-size:0.78rem;margin:0;">
+        <thead><tr>
+          <th style="background:#0f172a;padding:6px 8px;color:#64748b;font-weight:700;">#</th>
+          <th style="background:#0f172a;padding:6px 8px;color:#4ade80;font-weight:700;text-align:right;">收益</th>
+          <th style="background:#0f172a;padding:6px 8px;color:#fde047;font-weight:700;text-align:right;">總額</th>
+          <th style="background:#0f172a;padding:6px 8px;color:#67e8f9;font-weight:700;text-align:right;">累積%</th>
+        </tr></thead>
+        <tbody>${rows.map(row=>`
+          <tr>
+            <td style="padding:5px 8px;color:#94a3b8;font-weight:600;">${row.i}</td>
+            <td style="padding:5px 8px;text-align:right;color:#4ade80;font-weight:700;">+${formatNum(row.earning)}</td>
+            <td style="padding:5px 8px;text-align:right;color:#fde047;font-weight:700;">${formatNum(row.balance)}</td>
+            <td style="padding:5px 8px;text-align:right;color:#67e8f9;font-weight:600;">+${row.totalRoi}%</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ============================================================
+// 工具函數
+// ============================================================
+function generateId()  { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function getTodayStr() { return new Date().toISOString().slice(0,10); }
+function formatNum(n)  { if (n===null||n===undefined||isNaN(n)) return '—'; return parseFloat(Number(n).toFixed(2)).toLocaleString('zh-TW'); }
+function round2(n)     { return Math.round(n*100)/100; }
+function round6(n)     { return Math.round(n*1000000)/1000000; }
+function escHtml(s)    { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escCsv(s)     { return String(s).replace(/"/g,'""'); }
+function downloadFile(content, filename, mimeType) {
+  const blob=new Blob([content],{type:mimeType}), url=URL.createObjectURL(blob), a=document.createElement('a');
+  a.href=url; a.download=filename; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// 頁面載入初始化（async）
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+  // 初始化 Supabase（若已設定）
+  initSupabaseClient();
+  updateDbStatusBadge();
+
+  // 從資料來源（Supabase 或 localStorage）載入所有資料
+  await fetchAll();
+
+  // 渲染
+  renderColorPicker();
+  renderAll();
+  renderOverviewExtras();
+
+  // 若有未消耗的復原快照（頁面重整後依然保留），顯示復原按鈕
+  if (undoAction) document.getElementById('undo-btn').classList.remove('hidden');
+});
+</script>
+</body>
+</html>
