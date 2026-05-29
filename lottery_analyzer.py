@@ -21,8 +21,9 @@ import os
 import argparse
 import csv as _csv
 from pathlib import Path
-from datetime import datetime, date as _date
+from datetime import datetime, date as _date, timedelta
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any, Tuple
 
 try:
@@ -44,6 +45,9 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "draw_timezone": "Asia/Taipei",
+        "result_ready_time": "21:00",
+        "draw_weekdays": [0, 1, 2, 3, 4, 5],
         "file_patterns": ["*539*history*", "*539歷史*", "*taiwan*539*", "*taiwan539*"],
         "csv_filename":  "taiwan_539.csv",
         "theme":         {"primary": "#4338ca", "light": "#eef2ff",
@@ -55,6 +59,8 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "draw_timezone": "America/Detroit",
+        "result_ready_time": "20:15",
         "sync_grace_days": 1,
         "file_patterns": ["*michigan*result*", "*michigan*fantasy*", "*michigan*history*",
                           "*Michigan*Result*", "*michigan*"],
@@ -68,6 +74,8 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "draw_timezone": "America/Los_Angeles",
+        "result_ready_time": "19:15",
         "sync_grace_days": 1,
         "file_patterns": ["*ca_fantasy5*real*", "*california*fantasy5*real*",
                           "*ca_fantasy5*", "*california*real*"],
@@ -81,6 +89,8 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "pool_size":     39,
         "pick_count":    5,
         "draws_per_day": 1,
+        "draw_timezone": "America/New_York",
+        "result_ready_time": "23:15",
         "sync_grace_days": 1,
         "file_patterns": ["*take5*evening*", "*take5_evening*", "*newyork*take5*", "*ny_take5*"],
         "csv_filename":  "newyork_take5.csv",
@@ -994,7 +1004,7 @@ class RecentHeatProbabilityAnalyzer:
 # ============================================================
 
 class LotteryScrapers:
-    TIMEOUT = 20
+    TIMEOUT = 6
     CHROME_UA = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1049,10 +1059,10 @@ class LotteryScrapers:
             from requests.adapters import HTTPAdapter
             from urllib3.util.retry import Retry
             retry = Retry(
-                total=2,
-                connect=2,
-                read=2,
-                status=2,
+                total=0,
+                connect=0,
+                read=0,
+                status=0,
                 backoff_factor=0.45,
                 status_forcelist=(429, 500, 502, 503, 504),
                 allowed_methods=frozenset(["GET"]),
@@ -1228,7 +1238,11 @@ class LotteryScrapers:
                               time_filter: Optional[str] = None) -> List[Dict]:
         results: List[Dict] = []
         year = datetime.now().year
-        for y in range(year, min_year - 1, -1):
+        if count <= 45:
+            start_year = max(min_year, year - 1)
+        else:
+            start_year = min_year
+        for y in range(year, start_year - 1, -1):
             url = url_template.format(year=y)
             r = cls._get(url)
             if not r:
@@ -1498,8 +1512,32 @@ class AutoSyncManager:
             report[key] = self._sync_one(key, cfg)
         return report
 
+    def _expected_latest_date(self, cfg: Dict) -> _date:
+        tz_name = cfg.get("draw_timezone", "UTC")
+        ready = str(cfg.get("result_ready_time", "00:00"))
+        try:
+            now_local = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            now_local = datetime.now()
+        try:
+            hour_s, minute_s = ready.split(":", 1)
+            ready_minutes = int(hour_s) * 60 + int(minute_s)
+        except Exception:
+            ready_minutes = 0
+        expected = now_local.date()
+        now_minutes = now_local.hour * 60 + now_local.minute
+        if now_minutes < ready_minutes:
+            expected = expected - timedelta(days=1)
+
+        draw_weekdays = cfg.get("draw_weekdays")
+        if draw_weekdays:
+            allowed = {int(x) for x in draw_weekdays}
+            while expected.weekday() not in allowed:
+                expected = expected - timedelta(days=1)
+        return expected
+
     def _sync_one(self, key: str, cfg: Dict) -> Dict:
-        today_d = datetime.now().date()
+        expected_latest = self._expected_latest_date(cfg)
 
         # 取得本地最新日期
         df = self.loader.load_silent(key, cfg)
@@ -1508,11 +1546,17 @@ class AutoSyncManager:
             gap_days = 999
         else:
             latest_local = df["date"].max().date()
-            gap_days = (today_d - latest_local).days
+            gap_days = max(0, (expected_latest - latest_local).days)
 
         grace_days = int(cfg.get("sync_grace_days", 0))
         if gap_days <= grace_days:
-            return {"new_count": 0, "message": "資料已是最新", "gap_days": gap_days}
+            return {
+                "new_count": 0,
+                "message": "資料已是最新",
+                "gap_days": gap_days,
+                "expected_latest": expected_latest.isoformat(),
+                "latest_local": latest_local.isoformat() if latest_local else "",
+            }
 
         print(f"  [SYNC] {cfg['name']}：本地落後 {gap_days} 天，嘗試補齊...")
 
@@ -1539,7 +1583,7 @@ class AutoSyncManager:
                 continue
             if pd.isna(pd.to_datetime(draw["date"], errors="coerce")):
                 continue
-            if draw_date > today_d:
+            if draw_date > expected_latest:
                 continue
             if latest_local is not None and draw_date <= latest_local:
                 continue
@@ -1557,7 +1601,13 @@ class AutoSyncManager:
 
         msg = f"補齊 {new_count} 期" if new_count else f"已抓到 {len(draws_raw)} 期，但沒有比本地更新的資料"
         print(f"  [SYNC] {cfg['name']}：{msg}")
-        return {"new_count": new_count, "message": msg, "gap_days": gap_days}
+        return {
+            "new_count": new_count,
+            "message": msg,
+            "gap_days": gap_days,
+            "expected_latest": expected_latest.isoformat(),
+            "latest_local": latest_local.isoformat() if latest_local else "",
+        }
 
 
 # ============================================================
@@ -3724,7 +3774,13 @@ async function runScrape(){
   log.innerHTML='<span style="color:#94a3b8">正在偵測並補齊缺漏期數...</span>';
   try{
     var r=await fetch('/api/scrape',{method:'POST'});
-    var d=await r.json();
+    var txt=await r.text();
+    var d=null;
+    try{d=JSON.parse(txt);}
+    catch(parseErr){
+      throw new Error('HTTP '+r.status+' returned non-JSON: '+txt.slice(0,160).replace(/\s+/g,' '));
+    }
+    if(!r.ok){throw new Error(d.message||('HTTP '+r.status));}
     log.innerHTML=(d.details||[]).map(function(m){
       return '<div style="color:'+(m.ok?'#166534':'#b91c1c')+'">'+(m.ok?'✓':'✗')+' '+m.msg+'</div>';
     }).join('');
@@ -5802,9 +5858,12 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 ok  = "爬蟲無回應" not in info["message"] and "封鎖" not in info["message"]
                 if info["new_count"] > 0:
                     rebuilt = True
+                sync_meta = ""
+                if info.get("latest_local") or info.get("expected_latest"):
+                    sync_meta = f"（目前 {info.get('latest_local', '-')}, 應有 {info.get('expected_latest', '-')}）"
                 details.append({
                     "ok":  ok,
-                    "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）",
+                    "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）{sync_meta}",
                 })
             try:
                 analyzer.run(output_path, server_mode=True)
