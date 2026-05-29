@@ -61,7 +61,6 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "draws_per_day": 1,
         "draw_timezone": "America/Detroit",
         "result_ready_time": "20:15",
-        "sync_grace_days": 1,
         "file_patterns": ["*michigan*result*", "*michigan*fantasy*", "*michigan*history*",
                           "*Michigan*Result*", "*michigan*"],
         "csv_filename":  "michigan_fantasy5.csv",
@@ -76,7 +75,6 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "draws_per_day": 1,
         "draw_timezone": "America/Los_Angeles",
         "result_ready_time": "19:15",
-        "sync_grace_days": 1,
         "file_patterns": ["*ca_fantasy5*real*", "*california*fantasy5*real*",
                           "*ca_fantasy5*", "*california*real*"],
         "csv_filename":  "california_fantasy5.csv",
@@ -91,7 +89,6 @@ LOTTERY_CONFIG: Dict[str, Dict] = {
         "draws_per_day": 1,
         "draw_timezone": "America/New_York",
         "result_ready_time": "23:15",
-        "sync_grace_days": 1,
         "file_patterns": ["*take5*evening*", "*take5_evening*", "*newyork*take5*", "*ny_take5*"],
         "csv_filename":  "newyork_take5.csv",
         "theme":         {"primary": "#b91c1c", "light": "#fef2f2",
@@ -1599,7 +1596,21 @@ class AutoSyncManager:
             if self.writer.append(key, cfg, draw["date"], draw["numbers"]):
                 new_count += 1
 
-        msg = f"補齊 {new_count} 期" if new_count else f"已抓到 {len(draws_raw)} 期，但沒有比本地更新的資料"
+        scraped_dates = []
+        for draw in draws_raw:
+            try:
+                dt = pd.to_datetime(draw.get("date"), errors="coerce")
+                if not pd.isna(dt):
+                    scraped_dates.append(dt.date())
+            except Exception:
+                pass
+        source_latest = max(scraped_dates).isoformat() if scraped_dates else ""
+        if new_count:
+            msg = f"補齊 {new_count} 期"
+        elif gap_days > 0:
+            msg = f"來源尚未提供 {expected_latest.isoformat()} 的新資料"
+        else:
+            msg = f"已抓到 {len(draws_raw)} 期，但沒有比本地更新的資料"
         print(f"  [SYNC] {cfg['name']}：{msg}")
         return {
             "new_count": new_count,
@@ -1607,6 +1618,7 @@ class AutoSyncManager:
             "gap_days": gap_days,
             "expected_latest": expected_latest.isoformat(),
             "latest_local": latest_local.isoformat() if latest_local else "",
+            "source_latest": source_latest,
         }
 
 
@@ -5855,12 +5867,19 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
             rebuilt  = False
             for key, info in sync_rpt.items():
                 cfg = LOTTERY_CONFIG[key]
-                ok  = "爬蟲無回應" not in info["message"] and "封鎖" not in info["message"]
+                ok  = (
+                    "爬蟲無回應" not in info["message"]
+                    and "封鎖" not in info["message"]
+                    and "來源尚未提供" not in info["message"]
+                )
                 if info["new_count"] > 0:
                     rebuilt = True
                 sync_meta = ""
                 if info.get("latest_local") or info.get("expected_latest"):
-                    sync_meta = f"（目前 {info.get('latest_local', '-')}, 應有 {info.get('expected_latest', '-')}）"
+                    sync_meta = f"（目前 {info.get('latest_local', '-')}, 應有 {info.get('expected_latest', '-')}"
+                    if info.get("source_latest"):
+                        sync_meta += f", 來源最新 {info.get('source_latest')}"
+                    sync_meta += "）"
                 details.append({
                     "ok":  ok,
                     "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）{sync_meta}",
