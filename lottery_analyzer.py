@@ -1567,6 +1567,9 @@ class AutoSyncManager:
                 "new_count": 0,
                 "message":   "爬蟲無回應，請稍後手動更新",
                 "gap_days":  gap_days,
+                "expected_latest": expected_latest.isoformat(),
+                "latest_local": latest_local.isoformat() if latest_local else "",
+                "source_latest": "",
             }
 
         # 只保留比本地更新的資料，並由舊到新寫入，避免 CSV 時序倒插。
