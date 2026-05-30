@@ -355,8 +355,8 @@ class MissValueAnalyzer:
 
             min_s = WIN_MIN_SAMPLE.get(wkey, 10)
             candidates = [v for v in miss_stats.values() if v["total_count"] >= min_s]
-            # 新邏輯：遺漏越久 = 物極必反 = 危險 → 排序改為最高遺漏值優先（★ 代表需排除的危險號）
-            top8 = sorted(candidates, key=lambda x: (-x["miss_value"], x["no_show_rate"]))[:TOP_N]
+            # 統一邏輯：遺漏越久 → 越不會出 → 五不中安全選入 → 排序以最高不出率優先
+            top8 = sorted(candidates, key=lambda x: (-x["no_show_rate"], x["miss_value"]))[:TOP_N]
 
             top8_with_numbers: List[Dict] = []
             for item in top8:
@@ -609,9 +609,9 @@ class OEColorStatsAnalyzer:
 class StrategyBacktester:
     """Smart-scoring batch backtest (v9.5).
 
-    Scoring formula:
-      score = 100 - danger_pct * 0.6 - recent_freq * 8 * 0.4
-    Higher score = safer pick (less likely to appear) → top-5 chosen for 五不中.
+    Unified logic: high miss = less likely to appear = safe for 五不中.
+      score = 100 + danger_pct * 0.6 - recent_freq * 8 * 0.4
+    Higher score = safer pick (more overdue + colder) → top-5 chosen for 五不中.
     Strict time cutoff: at period T only draws[0..T-1] are visible.
     """
 
@@ -657,7 +657,7 @@ class StrategyBacktester:
             def _score(num: int, _cm=cur_miss, _mm=max_miss, _rf=rec_freq) -> float:
                 mm = _mm[num]
                 dp = min(_cm[num] / mm * 100.0 if mm > 0 else 0.0, 100.0)
-                return 100.0 - dp * 0.6 - _rf[num] * 8 * 0.4
+                return 100.0 + dp * 0.6 - _rf[num] * 8 * 0.4
 
             top_nums = sorted(range(1, pool_size + 1), key=_score, reverse=True)[:top_n]
             win = all(num not in draws[i + 1] for num in top_nums)
@@ -703,10 +703,10 @@ class MultiStrategyBacktester:
     """Runs 4 scoring strategies + random baseline, ranks by win_rate and stability."""
 
     STRATEGIES = [
-        {"id": "smart",   "label": "智能複合評分", "desc": "危險分×0.6 + 近期頻率×8×0.4"},
+        {"id": "smart",   "label": "智能複合評分", "desc": "遺漏比例×0.6 + 低頻加成×0.4（遺漏越久越安全）"},
         {"id": "miss",    "label": "純遺漏優先",   "desc": "當前遺漏值最高的 5 號"},
         {"id": "freq",    "label": "純低頻優先",   "desc": "近20期出現最少的 5 號"},
-        {"id": "danger",  "label": "純危險分優先", "desc": "逼近最大遺漏比例最低的 5 號"},
+        {"id": "danger",  "label": "純遺漏比例優先", "desc": "逼近最大遺漏比例最高的 5 號（最冷）"},
     ]
     # Theoretical random baseline for 5-from-39: C(34,5)/C(39,5)
     RANDOM_WIN_RATE = round(278256 / 575757 * 100, 1)  # ≈ 48.3%
@@ -754,11 +754,11 @@ class MultiStrategyBacktester:
                 return min(cur_miss[num] / mm * 100.0 if mm > 0 else 0.0, 100.0)
 
             scores: Dict[str, Dict[int, float]] = {
-                "smart":  {num: 100.0 - _dp(num) * 0.6 - rec_freq[num] * 8 * 0.4
+                "smart":  {num: 100.0 + _dp(num) * 0.6 - rec_freq[num] * 8 * 0.4
                            for num in range(1, pool_size + 1)},
                 "miss":   {num: float(cur_miss[num]) for num in range(1, pool_size + 1)},
                 "freq":   {num: -float(rec_freq[num]) for num in range(1, pool_size + 1)},
-                "danger": {num: 100.0 - _dp(num) for num in range(1, pool_size + 1)},
+                "danger": {num: _dp(num) for num in range(1, pool_size + 1)},
             }
             for sid, sc in scores.items():
                 top_nums = sorted(range(1, pool_size + 1), key=lambda x: sc[x], reverse=True)[:top_n]
@@ -885,13 +885,13 @@ class ExcludeScoreTuner:
                     mm = _mm[num]; cm = _cm[num]; rf = _rf[num]
                     dp = min(cm / mm * 100.0 if mm > 0 else 0.0, 100.0)
                     s = 0.0
-                    if cm <= 3: s += 20      # 熱門：剛出過，短期易連開
+                    if cm <= 3: s += 20      # 熱門：剛出過，短期易連開 → 危險
                     elif cm <= 8: s += 10    # 微熱
-                    s += min(rf * _p["freq"], 25)
-                    s += dp * _p["dp"]       # 高遺漏比例 → 物極必反危險
+                    s += min(rf * _p["freq"], 25)  # 近期高頻 → 危險
+                    s -= dp * _p["dp"]       # 遺漏越久 → 越不會出 → 安全 → 降低排除分
                     if num in _ld: s += _p["latest"]
                     if num in _nb: s += _p["neighbor"]
-                    if cm > 15 and rf == 0: s += _p["cold"]  # 極冷號 → 物極必反加危險分
+                    if cm > 15 and rf == 0: s -= _p["cold"]  # 極冷號 → 最安全 → 大幅降低排除分
                     return s
                 # High exclude score = dangerous → AVOID → pick opposite (low score = safe)
                 # We test: exclude top-5-by-score, check 五不中 on remaining
@@ -3552,15 +3552,15 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
 
         return (
             '<div id="miss-col-' + key + '">'
-            '<div class="col-title"><span class="icon">⚠️</span>'
-            '<h3 style="color:#7f1d1d">遺漏危險排除 Top ' + str(TOP_N) + '</h3></div>'
-            '<p class="col-desc">依「物極必反」原則：遺漏期數越高的號碼，反彈出現機率越大，<strong>五不中時應排除</strong>。<br>'
-            '<span style="background:#fee2e2;color:#7f1d1d;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700">⛔ 危險排除</span>'
-            ' 粉色球 = 當前遺漏期數最高的號碼（物極必反反彈訊號），五不中<strong>不要選它們</strong>。　'
-            '<span style="background:#fef9c3;color:#713f12;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700">⚡ 次危險</span>'
-            ' 遺漏偏高，留意。　'
-            '<span style="background:#f0fdf4;color:#166534;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700">✓ 相對安全</span>'
-            ' 遺漏適中，近期無異常，可納入五不中。切換視窗查看不同期數統計。</p>'
+            '<div class="col-title"><span class="icon">❄️</span>'
+            '<h3 style="color:#7f1d1d">五不中推薦 Top ' + str(TOP_N) + '</h3></div>'
+            '<p class="col-desc">遺漏越久的號碼，歷史上更傾向<strong>繼續不出現</strong>，五不中可優先選入。<br>'
+            '<span style="background:#fef9c3;color:#713f12;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700">✅ 優先選入</span>'
+            ' 粉色球 = 不出率最高、遺漏偏長，五不中<strong>建議選它們</strong>。　'
+            '<span style="background:#eff6ff;color:#1e40af;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700">👀 可觀察</span>'
+            ' 不出率中等（50~65%）。　'
+            '<span style="background:#f0fdf4;color:#166534;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700">⚠️ 留意</span>'
+            ' 遺漏短或近期剛出，慎選。切換視窗查看不同期數統計。</p>'
             '<div class="miss-subtabs">' + sub_tabs + '</div>'
             + panes +
             '</div>'
@@ -3601,10 +3601,10 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
                     '<span class="rec-badge" style="background:' + bg + ';color:' + fg + '">'
                     + str(mv_val) + '期</span>'
                     '<div class="rec-info">'
-                    '<div class="rec-title">⚠️ 遺漏 ' + str(mv_val) + ' 期（物極必反）</div>'
-                    '<div class="rec-sub">歷史不出率 ' + str(rate) + '% ／樣本 ' + str(total_c) + '</div>'
+                    '<div class="rec-title">遺漏值 ' + str(mv_val) + ' 期</div>'
+                    '<div class="rec-sub">不出 ' + str(nshow_c) + ' / 觀測 ' + str(total_c) + '</div>'
                     '</div>'
-                    '<span class="rec-pct" style="color:#b91c1c;font-size:.7rem">⛔排除</span>'
+                    '<span class="rec-pct" style="color:#15803d">' + str(rate) + '%</span>'
                     '</div>'
                     '<div class="balls-row">' + balls + '</div>'
                     '</div>'
@@ -3643,18 +3643,18 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
 
         return (
             items
-            + '<details><summary style="color:#ef4444">'
-            '<span class="caret">▶</span>展開遺漏值統計表（' + win_label + '，★ = 最高遺漏危險值）'
+            + '<details><summary style="color:#15803d">'
+            '<span class="caret">▶</span>展開遺漏值完整不出率表（' + win_label + '，★ = Top ' + str(TOP_N) + ' 推薦選入）'
             '</summary>'
             '<div class="table-wrap"><table>'
-            '<thead><tr><th>遺漏值</th><th>歷史不出率</th><th>不出次數</th><th>總樣本</th></tr></thead>'
+            '<thead><tr><th>遺漏值</th><th>不出勝率</th><th>不出次數</th><th>總樣本</th></tr></thead>'
             '<tbody>' + miss_rows + '</tbody>'
             '</table></div></details>'
-            '<details><summary style="color:#ef4444">'
-            '<span class="caret">▶</span>展開全部號碼當前遺漏狀態（★ = 物極必反危險，應排除）'
+            '<details><summary style="color:#15803d">'
+            '<span class="caret">▶</span>展開全部號碼當前遺漏狀態（★ = 推薦選入五不中）'
             '</summary>'
             '<div class="table-wrap"><table>'
-            '<thead><tr><th>號碼</th><th>當前遺漏</th><th>歷史不出率</th><th>不出次數</th><th>總樣本</th></tr></thead>'
+            '<thead><tr><th>號碼</th><th>當前遺漏</th><th>不出勝率</th><th>不出次數</th><th>總樣本</th></tr></thead>'
             '<tbody>' + curr_rows + '</tbody>'
             '</table></div></details>'
         )
