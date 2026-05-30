@@ -24,7 +24,7 @@ from pathlib import Path
 from datetime import datetime, date as _date, timedelta
 from collections import defaultdict
 from zoneinfo import ZoneInfo
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 
 try:
     import pandas as pd
@@ -1029,13 +1029,13 @@ class LotteryScrapers:
         "X-Requested-With": "XMLHttpRequest",
     }
     WEEKDAY_DATE_RE = re.compile(
-        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+"
+        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+"
         r"[A-Z][a-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{4}"
         r"(?:\s+-\s+\d{1,2}:\d{2}\s*(?:am|pm))?",
         re.I,
     )
     WEEKDAY_ONLY_RE = re.compile(
-        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$",
+        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?$",
         re.I,
     )
     MONTH_DATE_RE = re.compile(
@@ -1144,9 +1144,18 @@ class LotteryScrapers:
     def _numbers_from_any(value: Any) -> List[int]:
         if value is None:
             return []
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, dict):
+            raw = []
+            for key in sorted(value.keys(), key=lambda k: int(k) if str(k).isdigit() else 999):
+                item = value[key]
+                if isinstance(item, dict):
+                    item = item.get("Number", item.get("number", item))
+                raw.extend(re.findall(r"\d+", str(item)))
+        elif isinstance(value, (list, tuple)):
             raw = []
             for item in value:
+                if isinstance(item, dict):
+                    item = item.get("Number", item.get("number", item))
                 raw.extend(re.findall(r"\d+", str(item)))
         else:
             raw = re.findall(r"\d+", str(value))
@@ -1179,6 +1188,95 @@ class LotteryScrapers:
             clean.append(draw)
         clean.sort(key=lambda x: x["date"], reverse=True)
         return clean[:count]
+
+    @classmethod
+    def _best_source(cls, label: str, count: int,
+                     sources: List[Tuple[str, Callable[[], List[Dict]]]]) -> List[Dict]:
+        best: List[Dict] = []
+        best_name = ""
+        for name, fetch in sources:
+            try:
+                draws = cls._clean_draws(fetch() or [], count)
+            except Exception as e:
+                print(f"[SCRAPER] {label}: {name} failed: {e}")
+                continue
+            if not draws:
+                continue
+            latest = draws[0]["date"]
+            if (not best or latest > best[0]["date"] or
+                    (latest == best[0]["date"] and len(draws) > len(best))):
+                best = draws
+                best_name = name
+        if best:
+            print(f"[SCRAPER] {label}: using {best_name}, latest {best[0]['date']}")
+            return best[:count]
+        print(f"[SCRAPER] {label}: no source responded with usable draws")
+        return []
+
+    @classmethod
+    def _parse_lotterypost_html(cls, html: str, draw_label: Optional[str] = None) -> List[Dict]:
+        draws: List[Dict] = []
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            lines = [
+                line.strip()
+                for line in soup.get_text("\n").splitlines()
+                if line.strip()
+            ]
+        except Exception:
+            return draws
+
+        label_l = draw_label.lower() if draw_label else ""
+        for i, line in enumerate(lines):
+            if not cls.WEEKDAY_DATE_RE.match(line):
+                continue
+            date_s = cls._normalize_date(line)
+            if not date_s:
+                continue
+            scan_from = i + 1
+            scan_to = min(len(lines), i + 45)
+            if draw_label:
+                found = False
+                for j in range(i + 1, scan_to):
+                    if cls.WEEKDAY_DATE_RE.match(lines[j]):
+                        break
+                    if lines[j].lower() == label_l:
+                        scan_from = j + 1
+                        found = True
+                        break
+                if not found:
+                    continue
+            nums: List[int] = []
+            for nxt in lines[scan_from:scan_to]:
+                low = nxt.lower()
+                if cls.WEEKDAY_DATE_RE.match(nxt):
+                    break
+                if low in ("midday", "evening") and nums:
+                    break
+                if low.startswith(("double play", "prizes/odds", "next drawing", "game type")):
+                    break
+                if re.fullmatch(r"\d{1,2}", nxt):
+                    n = int(nxt)
+                    if 1 <= n <= 39:
+                        nums.append(n)
+                        if len(nums) == 5:
+                            break
+            draw = cls._draw(date_s, nums)
+            if draw:
+                draws.append(draw)
+        return draws
+
+    @classmethod
+    def _scrape_lotterypost(cls, path: str, count: int,
+                            draw_label: Optional[str] = None) -> List[Dict]:
+        r = cls._get(f"https://www.lotterypost.com/results/{path}", timeout=8)
+        if not r:
+            return []
+        return cls._clean_draws(
+            cls._parse_lotterypost_html(cls._response_text(r), draw_label=draw_label),
+            count,
+        )
 
     @classmethod
     def _parse_lotto_archive_html(cls, html: str,
@@ -1342,62 +1440,88 @@ class LotteryScrapers:
 
     @classmethod
     def scrape_michigan_fantasy5_bulk(cls, count: int = 30) -> List[Dict]:
-        """Michigan Fantasy 5：依序嘗試多個來源，任一成功即回傳。"""
-        for url_tmpl in (
-            "https://www.lottery.net/michigan/fantasy-5/numbers/{year}",
-            "https://www.lotto.net/michigan-fantasy-5/numbers/{year}",
-            "https://www.lotterycorner.com/mi/f5/{year}.html",
-        ):
-            results = cls._scrape_year_archives(url_tmpl, count=count, min_year=2010)
-            if results:
-                print(f"[SCRAPER] Michigan Fantasy5: 使用來源 {url_tmpl.split('/')[2]}")
-                return results
-        print("[SCRAPER] Michigan Fantasy5: 所有來源均無回應（Render IP 可能被封鎖）")
-        return []
+        return cls._best_source("Michigan Fantasy5", count, [
+            ("lottery.net", lambda: cls._scrape_year_archives(
+                "https://www.lottery.net/michigan/fantasy-5/numbers/{year}",
+                count=count, min_year=2010,
+            )),
+            ("lotto.net", lambda: cls._scrape_year_archives(
+                "https://www.lotto.net/michigan-fantasy-5/numbers/{year}",
+                count=count, min_year=2010,
+            )),
+            ("lotteryusa.com", lambda: cls._scrape_year_archives(
+                "https://www.lotteryusa.com/michigan/fantasy-5/year",
+                count=count, min_year=2010,
+            )),
+            ("lotterycorner.com", lambda: cls._scrape_year_archives(
+                "https://www.lotterycorner.com/mi/f5/{year}.html",
+                count=count, min_year=2010,
+            )),
+            ("lotterypost.com", lambda: cls._scrape_lotterypost(
+                "mi/fantasy5", count=count,
+            )),
+        ])
 
     @classmethod
     def scrape_california_fantasy5_bulk(cls, count: int = 30) -> List[Dict]:
-        """California Fantasy 5：官方 API 被擋時退到 Lottery.net 年度歸檔。"""
-        results: List[Dict] = []
-        per_page = 50
-        pages = max(1, min(120, -(-count // per_page)))
-        for page in range(1, pages + 1):
-            url = (
-                "https://www.calottery.com/api/DrawGameApi/"
-                f"DrawGamePastDrawResults/9/{per_page}/{page}"
-            )
-            data = cls._json(url, referer="https://www.calottery.com/en/draw-games/fantasy-5")
-            if not data:
-                break
-            rows = data.get("DrawGamePastDrawResults", []) if isinstance(data, dict) else data
-            if not rows:
-                break
-            for d in rows:
-                if not isinstance(d, dict):
-                    continue
-                draw = cls._draw(
-                    d.get("DrawDate") or d.get("drawDate") or d.get("date"),
-                    d.get("WinningNumbers") or d.get("winningNumbers") or d.get("numbers"),
+        def calottery_api() -> List[Dict]:
+            results: List[Dict] = []
+            per_page = 50
+            pages = max(1, min(120, -(-count // per_page)))
+            for page in range(1, pages + 1):
+                # Official endpoint order is game/page/size.
+                url = (
+                    "https://www.calottery.com/api/DrawGameApi/"
+                    f"DrawGamePastDrawResults/9/{page}/{per_page}"
                 )
-                if draw:
-                    results.append(draw)
-            if len(results) >= count:
-                break
+                data = cls._json(
+                    url,
+                    referer="https://www.calottery.com/en/draw-games/fantasy-5",
+                )
+                if not data:
+                    break
+                if isinstance(data, dict):
+                    rows = (
+                        data.get("PreviousDraws")
+                        or data.get("DrawGamePastDrawResults")
+                        or data.get("draws")
+                        or []
+                    )
+                else:
+                    rows = data
+                if not rows:
+                    break
+                for d in rows:
+                    if not isinstance(d, dict):
+                        continue
+                    draw = cls._draw(
+                        d.get("DrawDate") or d.get("drawDate") or d.get("date"),
+                        d.get("WinningNumbers") or d.get("winningNumbers") or d.get("numbers"),
+                    )
+                    if draw:
+                        results.append(draw)
+                if len(results) >= count:
+                    break
+            return results
 
-        if results:
-            print("[SCRAPER] California Fantasy5: 使用官方 API")
-            return cls._clean_draws(results, count)
-
-        for url_tmpl in (
-            "https://www.lottery.net/california/fantasy-5/numbers/{year}",
-            "https://www.lotto.net/california-fantasy-5/numbers/{year}",
-        ):
-            html_results = cls._scrape_year_archives(url_tmpl, count=count, min_year=2010)
-            if html_results:
-                print(f"[SCRAPER] California Fantasy5: 使用來源 {url_tmpl.split('/')[2]}")
-                return html_results
-        print("[SCRAPER] California Fantasy5: 所有來源均無回應（Render IP 可能被封鎖）")
-        return []
+        return cls._best_source("California Fantasy5", count, [
+            ("calottery.com", calottery_api),
+            ("lotterypost.com", lambda: cls._scrape_lotterypost(
+                "ca/fantasy5", count=count,
+            )),
+            ("lotteryusa.com", lambda: cls._scrape_year_archives(
+                "https://www.lotteryusa.com/california/fantasy-5/year",
+                count=count, min_year=2010,
+            )),
+            ("lottery.net", lambda: cls._scrape_year_archives(
+                "https://www.lottery.net/california/fantasy-5/numbers/{year}",
+                count=count, min_year=2010,
+            )),
+            ("lotto.net", lambda: cls._scrape_year_archives(
+                "https://www.lotto.net/california-fantasy-5/numbers/{year}",
+                count=count, min_year=2010,
+            )),
+        ])
 
     @classmethod
     def scrape_newyork_take5_bulk(cls, count: int = 30) -> List[Dict]:
@@ -1458,6 +1582,11 @@ class LotteryScrapers:
         else:
             print("[SCRAPER] NY Take5 evening: NY Open Data 無回應或無資料")
         pool.extend(nyod_draws)
+
+        lp_draws = cls._scrape_lotterypost("ny/take5", count=count, draw_label="Evening")
+        if lp_draws:
+            print(f"[SCRAPER] NY Take5 evening: LotteryPost latest {lp_draws[0]['date']}")
+            pool.extend(lp_draws)
 
         if pool:
             return cls._clean_draws(pool, count)
