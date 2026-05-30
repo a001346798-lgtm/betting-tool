@@ -201,7 +201,7 @@ class DataLoader:
                 "limit": str(PAGE),
             }
             if cutoff_date is not None:
-                params["draw_date"] = f"lte.{cutoff_date.strftime('%Y-%m-%d')}"
+                params["draw_date"] = f"lt.{cutoff_date.strftime('%Y-%m-%d')}"
             r = _requests.get(f"{base}/lottery_draws", headers=hdrs, params=params, timeout=30)
             r.raise_for_status()
             page = r.json()
@@ -609,7 +609,7 @@ class OEColorStatsAnalyzer:
 class StrategyBacktester:
     """Smart-scoring batch backtest (v9.5).
 
-    Formula identical to sidebar _updateSmartRec:
+    Scoring formula:
       score = 100 - danger_pct * 0.6 - recent_freq * 8 * 0.4
     Higher score = safer pick (less likely to appear) → top-5 chosen for 五不中.
     Strict time cutoff: at period T only draws[0..T-1] are visible.
@@ -2220,10 +2220,6 @@ tr.stripe td{background:#f8fafc}
   min-height:1.9rem;margin-top:.38rem;transition:background .15s}
 .pk-live-chip{display:inline-flex;align-items:center;padding:.1rem .38rem;
   border-radius:.28rem;font-size:.67rem;font-weight:700;line-height:1.4;white-space:nowrap}
-/* Today's decision summary (v9.9) */
-.pk-daily-panel{margin:.28rem 0 .22rem;min-height:0}
-.pk-daily-txt{background:#f0f9ff;border:1px solid #bae6fd;border-radius:.45rem;
-  padding:.3rem .55rem;font-size:.65rem;font-weight:800;color:#0369a1;line-height:1.6}
 /* Bet log filter bar (v9.9) */
 .bet-filter-bar{display:flex;flex-wrap:wrap;gap:.18rem;margin:.22rem 0 .18rem}
 .bet-filter-btn{font-size:.58rem;padding:.14rem .32rem;border:1px solid #e2e8f0;
@@ -2322,16 +2318,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
   border:1px solid #e2e8f0;background:#fff;color:#64748b;cursor:pointer;transition:all .13s}
 .pk-mode-btn:hover{background:#f1f5f9;border-color:#cbd5e1}
 .pk-mode-btn.active{background:#4338ca;color:#fff;border-color:#4338ca}
-
-/* Picker smart recommendation panel (v9.0) */
-.pk-smart-panel{margin-top:.38rem;padding:.35rem .5rem;background:#fafafa;
-  border:1px solid #e2e8f0;border-radius:.5rem}
-.pk-smart-chip{display:inline-flex;flex-direction:column;align-items:center;
-  padding:.2rem .35rem;border-radius:.4rem;cursor:pointer;border:1px solid #e2e8f0;
-  background:#fff;gap:.05rem;transition:all .13s;user-select:none}
-.pk-smart-chip:hover{transform:scale(1.06);border-color:#93c5fd;background:#eff6ff}
-.pk-smart-chip .chip-num{font-size:.68rem;font-weight:900;color:#1e293b}
-.pk-smart-chip .chip-danger{font-size:.56rem;font-weight:700}
 
 /* Picker cell heatmap + danger overlays (v9.0) */
 .pk-cell.mode-heatmap-0{background:#eff6ff!important;border-color:#bfdbfe!important}
@@ -2672,7 +2658,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
         cur_val   = hist_date if (is_hist and hist_date) else max_date
         rst_style = "display:inline" if is_hist else "display:none"
         if is_hist and hist_date:
-            mode_text  = "歷史基準：" + hist_date
+            mode_text  = "歷史基準：使用 " + hist_date + " 前資料"
             mode_class = "tm-mode-badge tm-mode-hist"
         else:
             mode_text  = "最新狀態"
@@ -2920,7 +2906,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             'list-style:none;user-select:none;padding:.1rem .2rem">'
             '<span style="font-size:1rem">📊</span>'
             '<h3 style="font-size:.88rem;font-weight:900;color:' + p + '">'
-            '策略批量回測 — 智能推薦評分 Top5 選號歷史驗證</h3>'
+            '策略批量回測 — 低危險度評分 Top5 歷史驗證</h3>'
             '<span class="caret" style="font-size:.6rem;transition:transform .2s;margin-left:.3rem">▶</span>'
             '<span style="font-size:.62rem;color:#94a3b8;margin-left:auto">共測 ' + str(total) + ' 期</span>'
             '</summary>'
@@ -3312,30 +3298,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<div id="pk-live-' + key + '" class="pk-live-bar">'
             '<span style="color:#94a3b8;font-size:.65rem">點選號碼查看即時單雙與色球統計</span>'
             '</div>'
-            # ── Smart recommendation
-            '<div class="pk-smart-panel">'
-            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">'
-            '<span style="font-size:.68rem;font-weight:800;color:#334155">🎯 智能推薦（最低危險度前5）</span>'
-            '<button class="pk-mode-btn" style="font-size:.6rem" '
-            'onclick="_updateSmartRec(\'' + key + '\')">刷新</button>'
-            '</div>'
-            '<div id="pk-smart-' + key + '" style="display:flex;flex-wrap:wrap;gap:.22rem">'
-            '<span style="color:#94a3b8;font-size:.63rem">載入中…</span>'
-            '</div>'
-            '<div style="display:flex;gap:.28rem;margin-top:.28rem">'
-            '<button class="pk-mode-btn" style="font-size:.57rem;flex:1;'
-            'background:#059669;color:#fff;padding:.28rem .1rem;" '
-            'onclick="_adoptRec(\'' + key + '\',\'conservative\')">🛡 保守推薦</button>'
-            '<button class="pk-mode-btn" style="font-size:.57rem;flex:1;'
-            'background:#4338ca;color:#fff;padding:.28rem .1rem;" '
-            'onclick="_adoptRec(\'' + key + '\',\'balanced\')">⚖ 均衡推薦</button>'
-            '<button class="pk-mode-btn" style="font-size:.57rem;flex:1;'
-            'background:#9333ea;color:#fff;padding:.28rem .1rem;" '
-            'onclick="_adoptRec(\'' + key + '\',\'cold\')">❄ 冷門推薦</button>'
-            '</div>'
-            '</div>'
-            # ── Today's Decision Summary placeholder
-            '<div id="pk-daily-' + key + '" class="pk-daily-panel"></div>'
             # ── Selected row + toolbar
             '<div class="picker-toolbar" style="margin-top:.38rem">'
             '<div id="pk-selected-' + key + '" class="picker-selected-row">'
@@ -3346,18 +3308,11 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<div id="pk-risk-' + key + '"></div>'
             # ── OE/Color guide placeholder (v10.2)
             '<div id="pk-oe-guide-' + key + '" style="margin:.1rem 0 .18rem"></div>'
-            # ── A/B Compare + Combo Backtest (v10.0 / v10.1)
+            # ── Manual combo backtest
             '<div style="display:flex;gap:.22rem;margin-top:.22rem;flex-wrap:wrap">'
-            '<button class="pk-mode-btn" style="font-size:.6rem;padding:.18rem .38rem" '
-            'onclick="savePickerCompare(\'' + key + '\',\'a\')">📌 存為A組</button>'
-            '<button class="pk-mode-btn" style="font-size:.6rem;padding:.18rem .38rem" '
-            'onclick="savePickerCompare(\'' + key + '\',\'b\')">📌 存為B組</button>'
-            '<button class="pk-mode-btn" style="font-size:.6rem;padding:.18rem .38rem;color:#94a3b8" '
-            'onclick="clearPickerCompare(\'' + key + '\')">✕ 清除</button>'
             '<button class="pk-mode-btn" style="font-size:.6rem;padding:.18rem .38rem;color:#6366f1" '
             'onclick="backtestCurrentCombo(\'' + key + '\')">📊 回測此組合</button>'
             '</div>'
-            '<div id="pk-compare-' + key + '"></div>'
             '<div id="pk-combo-bt-' + key + '"></div>'
             '<div style="display:flex;gap:.3rem;align-items:center;margin-top:.3rem">'
             '<input id="pk-note-' + key + '" class="pk-note-input" style="flex:1" type="text" '
@@ -3397,12 +3352,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             'onclick="_setBetFilter(\'' + key + '\',\'loss\')">敗</button>'
             '<button class="bet-filter-btn" data-f="manual" '
             'onclick="_setBetFilter(\'' + key + '\',\'manual\')">手動</button>'
-            '<button class="bet-filter-btn" data-f="conservative" '
-            'onclick="_setBetFilter(\'' + key + '\',\'conservative\')">保守</button>'
-            '<button class="bet-filter-btn" data-f="balanced" '
-            'onclick="_setBetFilter(\'' + key + '\',\'balanced\')">均衡</button>'
-            '<button class="bet-filter-btn" data-f="cold" '
-            'onclick="_setBetFilter(\'' + key + '\',\'cold\')">冷門</button>'
             '</div>'
             # ── Scrollable section
             '<div class="bet-log-section">'
@@ -3833,10 +3782,8 @@ function switchTab(key){
   if(st)st.textContent='互動選號盤 — '+(titles[key]||key);
   _applyPickerMarks(key);
   _applyPickerModeColors(key);
-  _updateSmartRec(key);
   _renderMissDist(key);
   renderBetLog(key);
-  renderDailyDecisionSummary(key);
   _restoreLock(key);
 }
 function setMissWin(key,win){
@@ -4009,11 +3956,6 @@ function updateTailOmissions(key){
      This stub exists for future manual invocation hooks. */
 }
 
-/* ── updateRecommendations: 智能推薦依歷史危險度重算 ── */
-function updateRecommendations(key){
-  _updateSmartRec(key);
-}
-
 /* ── _applyBacktestResult: 時光機全面重繪調度鏈（v9.3 最終架構）── */
 function _applyBacktestResult(key,d){
   /* Step 1 — write all data globals BEFORE any DOM work */
@@ -4033,13 +3975,8 @@ function _applyBacktestResult(key,d){
   /* Step 3b — restore locked selection if any (v10.1) */
   _restoreLock(key);
 
-  /* Step 4 — update smart recommendations */
-  updateRecommendations(key);
-
-  /* Step 5 — refresh selection risk summary (data globals updated in Step 1) */
+  /* Step 4 — refresh selection risk summary (data globals updated in Step 1) */
   renderSelectionRiskSummary(key);
-  /* Step 6 — refresh daily decision summary */
-  renderDailyDecisionSummary(key);
 }
 
 /* ── runBacktest: 執行歷史回測 ── */
@@ -4094,7 +4031,6 @@ var _pickerStrategySource={};
 var _betLogFilter={};
 var _betLogSyncTimer={};
 var _betLogSyncHash={};
-var _pickerCompare={};
 var _pickerLock={};
 window._MISS_DATA=window._MISS_DATA||{};
 window._RECENT_DATA=window._RECENT_DATA||{};
@@ -5066,65 +5002,6 @@ function renderSelectionRiskSummary(key){
   renderOEColorGuide(key);
 }
 
-/* ── A/B Compare (v10.0) ── */
-function savePickerCompare(key,slot){
-  var sel=(_pickerSel[key]||[]).slice();
-  if(sel.length===0)return;
-  _pickerCompare[key]=_pickerCompare[key]||{a:null,b:null};
-  _pickerCompare[key][slot]={sel:sel,score:calcComboScore(key,sel),stratSrc:_pickerStrategySource[key]||''};
-  renderPickerCompare(key);
-}
-function clearPickerCompare(key){
-  _pickerCompare[key]={a:null,b:null};
-  renderPickerCompare(key);
-}
-function renderPickerCompare(key){
-  var el=document.getElementById('pk-compare-'+key);
-  if(!el)return;
-  var cmp=_pickerCompare[key]||{};
-  if(!cmp.a&&!cmp.b){el.innerHTML='';return;}
-  var nhd=window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key]||{};
-  function _slotHtml(slot,label){
-    var s=cmp[slot];
-    if(!s)return '<div style="flex:1;padding:.28rem .35rem;border-radius:.3rem;background:#f8fafc;'
-      +'border:1px dashed #cbd5e1;text-align:center;font-size:.6rem;color:#94a3b8">'+label+'尚未存入</div>';
-    var scores=s.sel.map(function(n){return calcExcludeScore(key,n);});
-    var avgEx=Math.round(scores.reduce(function(a,b){return a+b;},0)/scores.length);
-    var maxEx=Math.max.apply(null,scores);
-    var sc=s.score;
-    var cc=sc>=70?'#dc2626':sc>=45?'#d97706':'#16a34a';
-    var balls=s.sel.map(function(n){
-      var ns=n<10?'0'+n:''+n;
-      return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.2rem;height:1.2rem;font-size:.52rem">'+ns+'</span>';
-    }).join('');
-    var seg=[0,0,0];
-    s.sel.forEach(function(n){if(n<=13)seg[0]++;else if(n<=26)seg[1]++;else seg[2]++;});
-    return '<div style="flex:1;padding:.28rem .35rem;border-radius:.3rem;background:#f8fafc;border:1px solid #e2e8f0">'
-      +'<div style="font-size:.6rem;font-weight:800;color:#475569;margin-bottom:.1rem">'+label
-      +(s.stratSrc?'<span style="font-size:.52rem;color:#94a3b8;margin-left:.2rem">['+s.stratSrc+']</span>':'')+'</div>'
-      +'<div style="display:flex;flex-wrap:wrap;gap:.1rem;margin-bottom:.12rem">'+balls+'</div>'
-      +'<div style="font-size:.58rem;color:#475569">危險指數：<strong style="color:'+cc+'">'+sc+'</strong>'
-      +' · 均排：'+avgEx+' · 最高：'+maxEx+'</div>'
-      +'<div style="font-size:.56rem;color:#94a3b8;margin-top:.06rem">段：低'+seg[0]+'/中'+seg[1]+'/高'+seg[2]+'</div>'
-      +'</div>';
-  }
-  var aHtml=_slotHtml('a','A 組');
-  var bHtml=_slotHtml('b','B 組');
-  var diffHtml='';
-  if(cmp.a&&cmp.b){
-    var diff=cmp.a.score-cmp.b.score;
-    var better=diff>0?'B 組較安全':'A 組較安全';
-    if(Math.abs(diff)<=3)better='兩組相近';
-    diffHtml='<div style="font-size:.59rem;font-weight:700;color:#6366f1;text-align:center;margin-top:.1rem">⟺ '+better+'（差 '+Math.abs(diff)+'）</div>';
-  }
-  el.innerHTML='<div style="margin-top:.22rem;padding:.22rem .28rem;border:1px solid #e0e7ff;'
-    +'border-radius:.4rem;background:#f8f7ff">'
-    +'<div style="font-size:.62rem;font-weight:800;color:#6366f1;margin-bottom:.15rem">A/B 組合比較</div>'
-    +'<div style="display:flex;gap:.22rem">'+aHtml+bHtml+'</div>'
-    +diffHtml
-    +'</div>';
-}
-
 /* ── backtestCurrentCombo: 自訂組合歷史回測（v10.1）── */
 function backtestCurrentCombo(key){
   var sel=_pickerSel[key]||[];
@@ -5225,7 +5102,6 @@ function lockPickerSel(key){
   if(sel.length===0){alert('請先選號再鎖定');return;}
   _pickerLock[key]={sel:sel.slice(),stratSrc:_pickerStrategySource[key]||''};
   try{localStorage.setItem('pickerLock_'+key,JSON.stringify(_pickerLock[key]));}catch(e){}
-  savePickerCompare(key,'a');
   var btn=document.getElementById('pk-lock-btn-'+key);
   if(btn){btn.textContent='🔓';btn.style.color='#dc2626';btn.title='已鎖定－點擊解鎖';
     btn.setAttribute('onclick','unlockPickerSel(\''+key+'\')');
@@ -5341,7 +5217,6 @@ function _applyOERatioSel(key){
   _pickerStrategySource[key]='配比';
   _refreshPickerUI(key);
   renderSelectionRiskSummary(key);
-  renderDailyDecisionSummary(key);
 }
 
 /* ── toggleMobilePicker: 手機底部抽屜開關 ── */
@@ -5455,114 +5330,6 @@ function _applyPickerModeColors(key){
   });
 }
 
-/* ── Smart recommendation (v9.6 — explainable chips) ── */
-function _updateSmartRec(key){
-  var el=document.getElementById('pk-smart-'+key);
-  if(!el)return;
-  var nhd=window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key]||{};
-  if(!Object.keys(nhd).length){
-    el.innerHTML='<span style="color:#94a3b8;font-size:.63rem">數據載入中…</span>';
-    return;
-  }
-  var scored=[];
-  for(var n=1;n<=39;n++){
-    var nd=nhd[n]||nhd[''+n]||{};
-    var dp=nd.danger_pct||0;
-    var freq=nd.recent_freq||0;
-    var safe=100-dp*0.6-freq*8*0.4;
-    scored.push({n:n,safe:safe,dp:dp,freq:freq,
-      miss:nd.current_miss||0,
-      isLatest:nd.in_latest_draw||false,
-      isNeighbor:nd.is_neighbor||false});
-  }
-  scored.sort(function(a,b){return b.safe-a.safe;});
-  var top5=scored.slice(0,5);
-  el.innerHTML=top5.map(function(s){
-    var cls=_clsBall(s.n);
-    var ns=s.n<10?'0'+s.n:''+s.n;
-    var dpC=s.dp<30?'#16a34a':s.dp<60?'#d97706':'#dc2626';
-    var badges='';
-    if(s.isLatest)badges+='<span style="font-size:.52rem;background:#fee2e2;color:#991b1b;border-radius:.2rem;padding:.05rem .22rem;font-weight:700">最新</span>';
-    if(s.isNeighbor)badges+='<span style="font-size:.52rem;background:#fef9c3;color:#713f12;border-radius:.2rem;padding:.05rem .22rem;font-weight:700">鄰</span>';
-    return '<div class="pk-smart-chip" onclick="togglePickerNum(\''+key+'\','+s.n+')" '
-      +'style="flex-direction:column;align-items:center;gap:.08rem;padding:.18rem .28rem;min-width:3.2rem">'
-      +'<span class="ball-sm '+cls+'" style="width:1.5rem;height:1.5rem;font-size:.62rem">'+ns+'</span>'
-      +'<span class="chip-danger" style="color:'+dpC+';font-size:.58rem">危'+s.dp+'%</span>'
-      +'<span style="font-size:.55rem;color:#475569">漏'+s.miss+'｜近'+s.freq+'次</span>'
-      +(badges?'<div style="display:flex;gap:.1rem;flex-wrap:wrap;justify-content:center">'+badges+'</div>':'')
-      +'</div>';
-  }).join('');
-  renderDailyDecisionSummary(key);
-}
-
-/* ── Today's Decision Summary (v9.9) ── */
-function renderDailyDecisionSummary(key){
-  var el=document.getElementById('pk-daily-'+key);
-  if(!el)return;
-  var nhd=window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key]||{};
-  if(!Object.keys(nhd).length){
-    el.innerHTML='<div class="pk-daily-txt">今日建議：資料不足，請先更新或切換彩票。</div>';
-    return;
-  }
-  var pd2=window._PERIOD_DATA&&window._PERIOD_DATA[key]||[];
-  // High-danger numbers (排除分 >= 65)
-  var dangerNums=[];
-  for(var n=1;n<=39;n++){var sc=calcExcludeScore(key,n);if(sc>=65)dangerNums.push({n:n,sc:sc});}
-  dangerNums.sort(function(a,b){return b.sc-a.sc;});
-  var top3=dangerNums.slice(0,3);
-  // Smart-5 avg danger pct
-  var sc0=[];
-  for(var n2=1;n2<=39;n2++){
-    var nd2=nhd[n2]||nhd[''+n2]||{};
-    sc0.push({n:n2,safe:100-(nd2.danger_pct||0)*0.6-(nd2.recent_freq||0)*8*0.4,dp:nd2.danger_pct||0});
-  }
-  sc0.sort(function(a,b){return b.safe-a.safe;});
-  var smart5=sc0.slice(0,5);
-  var avgDp=smart5.length?Math.round(smart5.reduce(function(s,x){return s+x.dp;},0)/smart5.length):50;
-  // Best strategy: lowest avg exclude score
-  function _stratAvg(strat){
-    var pool=[];
-    if(strat==='conservative'){
-      for(var n3=1;n3<=39;n3++)pool.push({sc:calcExcludeScore(key,n3)});
-      pool.sort(function(a,b){return a.sc-b.sc;});return pool.slice(0,5).reduce(function(s,x){return s+x.sc;},0)/5;
-    }else if(strat==='balanced'){
-      for(var n4=1;n4<=39;n4++){
-        var nd4=nhd[n4]||nhd[''+n4]||{};
-        if(nd4.in_latest_draw||(nd4.recent_freq||0)>=4)continue;
-        pool.push({sc:calcExcludeScore(key,n4)});
-      }
-      pool.sort(function(a,b){return a.sc-b.sc;});
-      return pool.length?pool.slice(0,5).reduce(function(s,x){return s+x.sc;},0)/Math.min(pool.length,5):999;
-    }else{
-      var seen={};
-      pd2.forEach(function(p){if(p.ref_numbers)p.ref_numbers.forEach(function(n5){
-        if(!seen[n5]){seen[n5]=true;var s2=calcExcludeScore(key,n5);if(s2<=65)pool.push({sc:s2});}
-      });});
-      pool.sort(function(a,b){return a.sc-b.sc;});
-      return pool.length?pool.slice(0,5).reduce(function(s,x){return s+x.sc;},0)/Math.min(pool.length,5):999;
-    }
-  }
-  var stratScores=[
-    {label:'保守',avg:_stratAvg('conservative')},
-    {label:'均衡',avg:_stratAvg('balanced')},
-    {label:'冷門',avg:_stratAvg('cold')}
-  ];
-  stratScores.sort(function(a,b){return a.avg-b.avg;});
-  var bestStrat=stratScores[0].label;
-  // Gap info
-  var gapData=window._GAP_DATA&&window._GAP_DATA[key];
-  var gapTxt='資料完整度正常';
-  if(gapData&&gapData.count>0){
-    gapTxt='有缺期'+(gapData.affectsRecent?'（影響近300期）':'（不影響近300期）');
-  }
-  // Risk label
-  var riskTxt=avgDp<35?'整體風險低':avgDp<55?'整體風險中低':avgDp<70?'整體風險中高':'建議保守觀望';
-  var dangerStr=top3.length?'，避免 '+top3.map(function(x){return x.n<10?'0'+x.n:''+x.n;}).join('/'):'';
-  var msg='今日建議：'+bestStrat+'推薦較佳'+dangerStr+'，'+gapTxt+'，'+riskTxt+'。';
-  el.innerHTML='<div class="pk-daily-txt">📌 今日決策總覽<br>'
-    +'<span style="font-size:.62rem;font-weight:500;color:#0c4a6e">'+msg+'</span></div>';
-}
-
 /* ── Bet log filter (v9.9) ── */
 function _setBetFilter(key,f){
   _betLogFilter[key]=f;
@@ -5573,79 +5340,6 @@ function _setBetFilter(key,f){
     });
   }
   renderBetLog(key);
-}
-
-/* ── Adopt smart recommendations by strategy (v9.8) ── */
-function _adoptRec(key,strategy){
-  var nhd=window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key]||{};
-  if(!Object.keys(nhd).length){alert('智能推薦數據未載入，請等待或刷新');return;}
-  var pd2=window._PERIOD_DATA&&window._PERIOD_DATA[key]||[];
-  var selected=[];
-  // Feature 7: detect if 'smart' strategy is weakening (近期趨勢修正)
-  var mbtList=window._MULTI_BT_DATA&&window._MULTI_BT_DATA[key]||[];
-  var smartEntry=null;
-  for(var mi=0;mi<mbtList.length;mi++){if(mbtList[mi].id==='smart'){smartEntry=mbtList[mi];break;}}
-  var isWeakening=smartEntry&&smartEntry.recent_100_rate!=null
-    &&(smartEntry.recent_100_rate<smartEntry.win_rate-5);
-  function _fillConservative(exclude){
-    var all=[];
-    for(var n=1;n<=39;n++){
-      if(exclude&&exclude.indexOf(n)!==-1)continue;
-      all.push({n:n,score:calcExcludeScore(key,n)});
-    }
-    all.sort(function(a,b){return a.score-b.score;});
-    return all;
-  }
-  if(strategy==='conservative'){
-    var sc=_fillConservative(null);
-    if(isWeakening){
-      // Also exclude neighbor-of-latest numbers when weakening
-      sc=sc.filter(function(s){var nd3=nhd[s.n]||nhd[''+s.n]||{};return !nd3.is_neighbor;});
-    }
-    selected=sc.slice(0,5).map(function(s){return s.n;});
-    _pickerStrategySource[key]=isWeakening?'保守↓':'保守';
-  }else if(strategy==='balanced'){
-    var sc2=[];
-    for(var n2=1;n2<=39;n2++){
-      var nd2=nhd[n2]||nhd[''+n2]||{};
-      if(nd2.in_latest_draw)continue;
-      if((nd2.recent_freq||0)>=4)continue;
-      if(isWeakening&&(nd2.current_miss||0)<=5)continue;
-      sc2.push({n:n2,score:calcExcludeScore(key,n2)});
-    }
-    sc2.sort(function(a,b){return a.score-b.score;});
-    selected=sc2.slice(0,5).map(function(s){return s.n;});
-    if(selected.length<5){
-      var fallback=_fillConservative(selected);
-      while(selected.length<5&&fallback.length){selected.push(fallback.shift().n);}
-    }
-    _pickerStrategySource[key]=isWeakening?'均衡↓':'均衡';
-  }else if(strategy==='cold'){
-    var seen={};
-    var coldPool=[];
-    pd2.forEach(function(p){
-      if(p.ref_numbers){
-        p.ref_numbers.forEach(function(n3){
-          if(!seen[n3]){
-            seen[n3]=true;
-            var sc3=calcExcludeScore(key,n3);
-            if(sc3<=65)coldPool.push({n:n3,score:sc3});
-          }
-        });
-      }
-    });
-    coldPool.sort(function(a,b){return a.score-b.score;});
-    selected=coldPool.slice(0,5).map(function(s){return s.n;});
-    if(selected.length<5){
-      var fallback2=_fillConservative(selected);
-      while(selected.length<5&&fallback2.length){selected.push(fallback2.shift().n);}
-    }
-    _pickerStrategySource[key]='冷門';
-  }
-  _pickerSel[key]=selected;
-  _refreshPickerUI(key);
-  renderSelectionRiskSummary(key);
-  renderDailyDecisionSummary(key);
 }
 
 /* ── CSV export (v9.0) ── */
@@ -5815,7 +5509,7 @@ class LotteryAnalyzer:
         return results
 
     def analyze_for_date(self, key: str, cutoff_date: pd.Timestamp) -> Optional[Dict]:
-        """時光機：以 cutoff_date 為截止點重新計算"""
+        """時光機：只使用 cutoff_date 之前的資料，避免偷看到當期結果。"""
         cfg = LOTTERY_CONFIG[key]
         df  = self.loader.load_silent(key, cfg, cutoff_date=cutoff_date)
         if df is None or len(df) < MAX_T + 10:
