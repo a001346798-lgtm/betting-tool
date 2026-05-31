@@ -2058,7 +2058,7 @@ body.sidebar-wide{--pw:var(--pw-wide)}
 .btn-tm:disabled{background:#e2e8f0;color:#94a3b8;cursor:not-allowed}
 .btn-tm-reset{padding:.28rem .7rem;border-radius:.4rem;font-size:.73rem;font-weight:700;border:1px solid #e2e8f0;cursor:pointer;background:#fff;color:#64748b;transition:all .15s}
 .btn-tm-reset:hover{background:#f1f5f9}
-.tm-mode-badge{font-size:.68rem;font-weight:700;padding:.18rem .5rem;border-radius:.3rem;white-space:nowrap}
+.tm-mode-badge{font-size:.68rem;font-weight:700;padding:.18rem .5rem;border-radius:.3rem;line-height:1.3;max-width:100%}
 .tm-mode-live{background:#dcfce7;color:#166534}
 .tm-mode-hist{background:#fef9c3;color:#713f12}
 .tm-mode-loading{background:#dbeafe;color:#1e3a8a}
@@ -2457,9 +2457,11 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
 
         hist_badge = ""
         if is_historical and hist_date:
+            visible_latest = str(data.get("max_date", pr.get("latest_date", "")))
             hist_badge = (
                 '<div class="hist-badge">'
-                '⏱️ 歷史回測模式　基準日：' + hist_date + '　（' + str(cnt) + ' 期）'
+                '⏱️ 歷史回測模式　模擬：' + hist_date + ' 開獎前　｜　'
+                '最新可見：' + visible_latest + '　（' + str(cnt) + ' 期）'
                 '</div>'
             )
         # Data freshness badge (v10.0)
@@ -2658,7 +2660,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
         cur_val   = hist_date if (is_hist and hist_date) else max_date
         rst_style = "display:inline" if is_hist else "display:none"
         if is_hist and hist_date:
-            mode_text  = "歷史基準：使用 " + hist_date + " 前資料"
+            visible_latest = str(data.get("max_date", pr.get("latest_date", "")))
+            mode_text  = "模擬 " + hist_date + " 開獎前｜資料只用到 " + visible_latest
             mode_class = "tm-mode-badge tm-mode-hist"
         else:
             mode_text  = "最新狀態"
@@ -2668,7 +2671,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<span class="tm-label">⏱️ 時光機</span>'
             '<input type="date" id="tm-date-' + key + '" '
             'min="' + min_date + '" max="' + max_date + '" value="' + cur_val + '">'
-            '<button class="btn-tm" onclick="runBacktest(\'' + key + '\')">執行歷史回測</button>'
+            '<button class="btn-tm" onclick="runBacktest(\'' + key + '\')">模擬開獎前</button>'
             '<button class="btn-tm-reset" id="tm-reset-' + key + '" style="' + rst_style + '" '
             'onclick="resetPanel(\'' + key + '\')">↩ 回最新</button>'
             '<span id="tm-mode-' + key + '" class="' + mode_class + '">' + mode_text + '</span>'
