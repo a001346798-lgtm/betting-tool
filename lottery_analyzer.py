@@ -201,7 +201,7 @@ class DataLoader:
                 "limit": str(PAGE),
             }
             if cutoff_date is not None:
-                params["draw_date"] = f"lt.{cutoff_date.strftime('%Y-%m-%d')}"
+                params["draw_date"] = f"lte.{cutoff_date.strftime('%Y-%m-%d')}"
             r = _requests.get(f"{base}/lottery_draws", headers=hdrs, params=params, timeout=30)
             r.raise_for_status()
             page = r.json()
@@ -2460,8 +2460,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             visible_latest = str(data.get("max_date", pr.get("latest_date", "")))
             hist_badge = (
                 '<div class="hist-badge">'
-                '⏱️ 歷史回測模式　模擬：' + hist_date + ' 開獎前　｜　'
-                '最新可見：' + visible_latest + '　（' + str(cnt) + ' 期）'
+                '⏱️ 歷史基準模式　資料基準日：' + hist_date + '　｜　'
+                '已納入至：' + visible_latest + '　（' + str(cnt) + ' 期）'
                 '</div>'
             )
         # Data freshness badge (v10.0)
@@ -2661,7 +2661,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
         rst_style = "display:inline" if is_hist else "display:none"
         if is_hist and hist_date:
             visible_latest = str(data.get("max_date", pr.get("latest_date", "")))
-            mode_text  = "模擬 " + hist_date + " 開獎前｜資料只用到 " + visible_latest
+            mode_text  = "資料基準日 " + hist_date + "｜已納入至 " + visible_latest + "，用來推估下一期"
             mode_class = "tm-mode-badge tm-mode-hist"
         else:
             mode_text  = "最新狀態"
@@ -2671,7 +2671,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<span class="tm-label">⏱️ 時光機</span>'
             '<input type="date" id="tm-date-' + key + '" '
             'min="' + min_date + '" max="' + max_date + '" value="' + cur_val + '">'
-            '<button class="btn-tm" onclick="runBacktest(\'' + key + '\')">模擬開獎前</button>'
+            '<button class="btn-tm" onclick="runBacktest(\'' + key + '\')">設定基準日</button>'
             '<button class="btn-tm-reset" id="tm-reset-' + key + '" style="' + rst_style + '" '
             'onclick="resetPanel(\'' + key + '\')">↩ 回最新</button>'
             '<span id="tm-mode-' + key + '" class="' + mode_class + '">' + mode_text + '</span>'
@@ -3511,7 +3511,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<div class="col-title"><span class="icon">🧊</span>'
             '<h3 style="color:' + cb + '">冷門期數 Top ' + str(TOP_N) + '（近' + str(PERIOD_BACKTEST_WINDOW) + '期回測）</h3></div>'
             '<p class="col-desc">往前第 t 期開出的號碼，在最新一期<strong>最不容易再出現</strong>（重複率低→高）。<br>'
-            '僅使用目前基準日前最近 ' + str(PERIOD_BACKTEST_WINDOW) + ' 期作為回測樣本。<br>'
+            '僅使用目前資料基準日當天與之前最近 ' + str(PERIOD_BACKTEST_WINDOW) + ' 期作為回測樣本。<br>'
             '球形數字 ＝ 該期實際開獎號碼。'
             '<span style="background:#fef9c3;color:#713f12;border-radius:.25rem;padding:.05rem .35rem;font-size:.65rem;font-weight:700;margin-left:.3rem">⛔ 建議避開</span>'
             '這些號碼不要選入你的組合。</p>'
@@ -5512,7 +5512,7 @@ class LotteryAnalyzer:
         return results
 
     def analyze_for_date(self, key: str, cutoff_date: pd.Timestamp) -> Optional[Dict]:
-        """時光機：只使用 cutoff_date 之前的資料，避免偷看到當期結果。"""
+        """時光機：使用 cutoff_date 當天與之前的資料，還原用該日資料推估下一期。"""
         cfg = LOTTERY_CONFIG[key]
         df  = self.loader.load_silent(key, cfg, cutoff_date=cutoff_date)
         if df is None or len(df) < MAX_T + 10:
