@@ -4254,7 +4254,7 @@ function _setBetLogSyncStatus(key,msg,kind){
   var bd=kind==='ok'?'#a7f3d0':(kind==='err'?'#fecaca':'#bfdbfe');
   el.style.cssText='font-size:.64rem;margin:.22rem 0;padding:.22rem .42rem;border-radius:.38rem;'
     +'background:'+bg+';color:'+fg+';border:1px solid '+bd+';font-weight:700';
-  el.textContent='CSV自動同步：'+msg;
+  el.textContent='☁️ 雲端同步：'+msg;
 }
 function _buildBetLogSyncEntries(key,log,drawList){
   var draws=drawList||_drawDataFor(key);
@@ -4298,13 +4298,13 @@ function _syncBetLogNow(key){
   var sk='betLog_'+key;
   var log=[];
   try{log=JSON.parse(localStorage.getItem(sk)||'[]');}catch(e){log=[];}
-  var entries=_buildBetLogSyncEntries(key,log,_drawDataFor(key));
-  var payload=JSON.stringify({lottery:key,entries:entries});
+  // Send raw entries to Supabase (not processed); server stores them as-is
+  var payload=JSON.stringify({lottery:key,entries:log});
   if(_betLogSyncHash[key]===payload){
-    _setBetLogSyncStatus(key,'已是最新（'+entries.length+'筆）','ok');
+    _setBetLogSyncStatus(key,'已是最新（'+log.length+'筆）','ok');
     return;
   }
-  _setBetLogSyncStatus(key,'同步中...','pending');
+  _setBetLogSyncStatus(key,'儲存中...','pending');
   fetch('/api/betlog/sync',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -4312,13 +4312,36 @@ function _syncBetLogNow(key){
   }).then(function(r){return r.json();}).then(function(d){
     if(d&&d.success){
       _betLogSyncHash[key]=payload;
-      _setBetLogSyncStatus(key,'已同步 '+d.count+' 筆','ok');
+      _setBetLogSyncStatus(key,'已儲存 '+d.count+' 筆至雲端','ok');
     }else{
-      _setBetLogSyncStatus(key,(d&&d.message)||'同步失敗','err');
+      _setBetLogSyncStatus(key,(d&&d.message)||'儲存失敗','err');
     }
   }).catch(function(){
-    _setBetLogSyncStatus(key,'同步失敗，稍後會再試','err');
+    _setBetLogSyncStatus(key,'網路失敗，稍後會再試','err');
   });
+}
+function _loadBetLogFromServer(key){
+  if(!IS_SERVER_MODE||!window.fetch)return;
+  fetch('/api/betlog/load?lottery='+encodeURIComponent(key))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.success||!Array.isArray(d.entries))return;
+      var sk='betLog_'+key;
+      var local=[];
+      try{local=JSON.parse(localStorage.getItem(sk)||'[]');}catch(e){}
+      // Server wins if it has more entries, or local is empty
+      if(d.entries.length>0&&d.entries.length>=local.length){
+        localStorage.setItem(sk,JSON.stringify(d.entries));
+        renderBetLog(key);
+        if(d.entries.length!==local.length){
+          _setBetLogSyncStatus(key,'已從雲端載入 '+d.entries.length+' 筆','ok');
+        }
+      } else if(local.length>d.entries.length&&local.length>0){
+        // Local has more → push to server
+        _syncBetLogNow(key);
+      }
+    })
+    .catch(function(){});
 }
 function savePickerEntry(key){
   var sel=(_pickerSel[key]||[]).slice().sort(function(a,b){return a-b;});
@@ -5442,6 +5465,13 @@ function _renderMissDist(key){
   if(!btns.length)return;
   var target=saved?btns.find(function(b){return b.id==='tab-'+saved;}):null;
   (target||btns[0]).click();
+  // 從 Supabase 雲端載入各彩種的選號紀錄（覆蓋本機快取，實現跨裝置同步）
+  if(IS_SERVER_MODE&&window.fetch){
+    btns.forEach(function(b){
+      var k=b.id?b.id.replace(/^tab-/,''):'';
+      if(k)_loadBetLogFromServer(k);
+    });
+  }
 })();
 """
 
@@ -5672,22 +5702,53 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         response.headers["Expires"] = "0"
         return response
 
+    @app.route("/api/betlog/load", methods=["GET"])
+    def api_betlog_load():
+        """從 Supabase 載入選號紀錄"""
+        try:
+            key = request.args.get("lottery", "")
+            if key not in LOTTERY_CONFIG:
+                return jsonify({"success": False, "entries": []})
+            r = _requests.get(
+                f"{_supa_base()}/bet_log",
+                headers=_supa_rhdrs(),
+                params={"lottery": f"eq.{key}", "select": "entries"},
+                timeout=15,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            entries = rows[0]["entries"] if rows else []
+            return jsonify({"success": True, "entries": entries, "count": len(entries)})
+        except Exception as e:
+            print(f"[ERROR] betlog_load: {e}")
+            return jsonify({"success": False, "entries": [], "message": str(e)})
+
     @app.route("/api/betlog/sync", methods=["POST"])
     def api_betlog_sync():
-        data = request.get_json(force=True) or {}
-        key = data.get("lottery", "")
-        if key not in LOTTERY_CONFIG:
-            return jsonify({"success": False, "message": "invalid lottery"}), 400
-        entries = data.get("entries", [])
-        if not isinstance(entries, list):
-            return jsonify({"success": False, "message": "entries must be a list"}), 400
-        csv_path, json_path, count = _write_betlog_files(key, entries)
-        return jsonify({
-            "success": True,
-            "count": count,
-            "csv": str(csv_path),
-            "json": str(json_path),
-        })
+        """將選號紀錄整批 upsert 至 Supabase"""
+        try:
+            data = request.get_json(force=True) or {}
+            key = data.get("lottery", "")
+            if key not in LOTTERY_CONFIG:
+                return jsonify({"success": False, "message": "invalid lottery"}), 400
+            entries = data.get("entries", [])
+            if not isinstance(entries, list):
+                return jsonify({"success": False, "message": "entries must be a list"}), 400
+            r = _requests.post(
+                f"{_supa_base()}/bet_log?on_conflict=lottery",
+                headers=_supa_whdrs(),
+                json={
+                    "lottery":    key,
+                    "entries":    entries,
+                    "updated_at": datetime.now().isoformat(),
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            return jsonify({"success": True, "count": len(entries)})
+        except Exception as e:
+            print(f"[ERROR] betlog_sync: {e}")
+            return jsonify({"success": False, "message": str(e)}), 500
 
     @app.route("/api/scrape", methods=["POST"])
     def api_scrape():
