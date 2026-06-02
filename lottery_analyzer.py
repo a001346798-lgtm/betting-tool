@@ -2132,6 +2132,11 @@ tr.stripe td{background:#f8fafc}
 .pk-cell.selected{border-color:#1e3a8a;background:#1e3a8a;
   box-shadow:0 3px 8px rgba(30,58,138,.45)}
 .pk-cell.selected .pk-miss{color:#bfdbfe}
+.pk-cell.draft{border:2px dashed #f59e0b!important;background:rgba(254,243,199,.6)!important;
+  box-shadow:0 0 0 2px rgba(245,158,11,.2)!important;opacity:.82}
+.pk-cell.draft .pk-miss{color:#92400e!important}
+.pk-draft-panel-inner{background:#fffbeb;border:1.5px dashed #fcd34d;
+  border-radius:.5rem;padding:.35rem .45rem;margin:.3rem 0}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -3273,7 +3278,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             miss = current_misses.get(n, 0)
             cells += (
                 '<div class="pk-cell" data-num="' + str(n) + '" '
-                'onclick="togglePickerNum(\'' + key + '\',' + str(n) + ')">'
+                'onclick="togglePickerNum(\'' + key + '\',' + str(n) + ')" '
+                'oncontextmenu="cancelDraftNum(\'' + key + '\',' + str(n) + ');return false;">'
                 '<span class="ball-sm ' + cls + '">' + f'{n:02d}' + '</span>'
                 '<span class="pk-miss">遺漏' + str(miss) + '</span>'
                 '</div>'
@@ -3301,6 +3307,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<div id="pk-live-' + key + '" class="pk-live-bar">'
             '<span style="color:#94a3b8;font-size:.65rem">點選號碼查看即時單雙與色球統計</span>'
             '</div>'
+            # ── Draft comparison panel (v11)
+            '<div id="pk-draft-panel-' + key + '"></div>'
             # ── Selected row + toolbar
             '<div class="picker-toolbar" style="margin-top:.38rem">'
             '<div id="pk-selected-' + key + '" class="picker-selected-row">'
@@ -4030,6 +4038,7 @@ function resetPanel(key){
 /* ── Number picker ── */
 var _currentPickerKey=null;
 var _pickerSel={};
+var _pickerDraft={};
 var _pickerStrategySource={};
 var _betLogFilter={};
 var _betLogSyncTimer={};
@@ -4100,25 +4109,113 @@ function _calcPickerStats(sel){
 
 function togglePickerNum(key,n){
   var sel=_pickerSel[key]||(_pickerSel[key]=[]);
-  var idx=sel.indexOf(n);
-  if(idx!==-1){sel.splice(idx,1);}
-  else{if(sel.length>=5)return;sel.push(n);}
+  var draft=_pickerDraft[key]||(_pickerDraft[key]=[]);
+  var selIdx=sel.indexOf(n);
+  var draftIdx=draft.indexOf(n);
+  if(selIdx!==-1){
+    // already locked → deselect
+    sel.splice(selIdx,1);
+  } else if(draftIdx!==-1){
+    // in draft → promote to locked (if room)
+    if(sel.length>=5)return;
+    draft.splice(draftIdx,1);
+    sel.push(n);
+  } else {
+    // new click → add to draft
+    draft.push(n);
+  }
   _pickerStrategySource[key]='';
   _refreshPickerUI(key);
   renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
 }
 function clearPickerSel(key){
   _pickerSel[key]=[];
+  _pickerDraft[key]=[];
   _refreshPickerUI(key);
   renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
+}
+function cancelDraftNum(key,n){
+  var draft=_pickerDraft[key]||(_pickerDraft[key]=[]);
+  var idx=draft.indexOf(n);
+  if(idx!==-1){draft.splice(idx,1);}
+  _refreshPickerUI(key);
+  renderDraftPanel(key);
+}
+function lockAllDraft(key){
+  var sel=_pickerSel[key]||(_pickerSel[key]=[]);
+  var draft=(_pickerDraft[key]||[]).slice();
+  draft.forEach(function(n){
+    if(sel.indexOf(n)===-1&&sel.length<5)sel.push(n);
+  });
+  _pickerDraft[key]=[];
+  _pickerStrategySource[key]='';
+  _refreshPickerUI(key);
+  renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
+}
+function renderDraftPanel(key){
+  var el=document.getElementById('pk-draft-panel-'+key);
+  if(!el)return;
+  var draft=_pickerDraft[key]||[];
+  if(draft.length===0){el.innerHTML='';return;}
+  var nhd=(window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{};
+  var rows=draft.slice().sort(function(a,b){return a-b;}).map(function(n){
+    var nd=nhd[n]||nhd[''+n]||{};
+    var miss=nd.current_miss||0;
+    var avgG=nd.avg_gap||0;
+    var dp=nd.danger_pct||0;
+    var freq=nd.recent_freq||0;
+    var ns=n<10?'0'+n:''+n;
+    var cls=_clsBall(n);
+    var dpC=dp>=70?'#dc2626':dp>=40?'#d97706':'#16a34a';
+    var freqC=freq>=4?'#dc2626':freq>=2?'#d97706':'#16a34a';
+    var missInfo=avgG>0?miss+'(均'+avgG+')':''+miss;
+    return '<tr style="border-bottom:1px solid #fde68a">'
+      +'<td style="padding:.15rem .28rem;text-align:center">'
+      +'<span class="ball-sm '+cls+'" style="font-size:.56rem;width:1.3rem;height:1.3rem">'+ns+'</span>'
+      +'</td>'
+      +'<td style="text-align:center;font-size:.62rem;color:#334155;font-weight:700">'+missInfo+'</td>'
+      +'<td style="text-align:center;font-size:.62rem"><span style="color:'+freqC+';font-weight:700">'+freq+'次</span></td>'
+      +'<td style="text-align:center;font-size:.62rem"><span style="color:'+dpC+';font-weight:700">'+dp+'%</span></td>'
+      +'<td style="text-align:center;padding:.1rem .15rem">'
+      +'<button onclick="cancelDraftNum(\''+key+'\','+n+')" '
+      +'style="font-size:.55rem;padding:.06rem .22rem;border:none;border-radius:.2rem;'
+      +'background:#fee2e2;color:#991b1b;cursor:pointer;line-height:1.4">✕</button>'
+      +'</td>'
+      +'</tr>';
+  }).join('');
+  el.innerHTML='<div class="pk-draft-panel-inner">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.22rem">'
+    +'<span style="font-size:.62rem;font-weight:800;color:#92400e">🔲 預選比對（'+draft.length+'個）'
+    +'<span style="font-size:.55rem;font-weight:400;color:#b45309;margin-left:.25rem">虛線格=預選，再點一次=鎖定</span></span>'
+    +'<button onclick="lockAllDraft(\''+key+'\')" '
+    +'style="font-size:.6rem;padding:.14rem .38rem;border:none;border-radius:.3rem;'
+    +'background:#1e3a8a;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">一鍵全部鎖定</button>'
+    +'</div>'
+    +'<table style="width:100%;border-collapse:collapse">'
+    +'<thead><tr style="font-size:.56rem;color:#92400e;background:#fef3c7">'
+    +'<th style="padding:.1rem .28rem;text-align:center">號碼</th>'
+    +'<th style="text-align:center">遺漏值</th>'
+    +'<th style="text-align:center">近期熱力</th>'
+    +'<th style="text-align:center">危險度</th>'
+    +'<th></th>'
+    +'</tr></thead>'
+    +'<tbody>'+rows+'</tbody>'
+    +'</table>'
+    +'</div>';
 }
 function _refreshPickerUI(key){
   var sel=_pickerSel[key]||[];
+  var draft=_pickerDraft[key]||[];
   var grid=document.getElementById('pk-grid-'+key);
   if(grid){
     grid.querySelectorAll('.pk-cell').forEach(function(cell){
       var n=parseInt(cell.dataset.num);
-      cell.classList.toggle('selected',sel.indexOf(n)!==-1);
+      var inSel=sel.indexOf(n)!==-1;
+      cell.classList.toggle('selected',inSel);
+      cell.classList.toggle('draft',!inSel&&draft.indexOf(n)!==-1);
     });
   }
   var row=document.getElementById('pk-selected-'+key);
@@ -4404,9 +4501,11 @@ function savePickerEntry(key){
   localStorage.setItem(sk,JSON.stringify(log));
   _scheduleBetLogAutoSync(key);
   _pickerSel[key]=[];
+  _pickerDraft[key]=[];
   if(noteEl)noteEl.value='';
   _refreshPickerUI(key);
   renderBetLog(key);
+  renderDraftPanel(key);
 }
 function deletePickerEntry(key,idx){
   var sk='betLog_'+key;
