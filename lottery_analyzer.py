@@ -602,328 +602,6 @@ class OEColorStatsAnalyzer:
         return {"oe_pcts": oe_pcts, "color_dist": color_dist, "total_draws": n}
 
 
-# ============================================================
-# SECTION 3.8 — STRATEGY BACKTESTER  (v9.5)
-# ============================================================
-
-class StrategyBacktester:
-    """Smart-scoring batch backtest (v9.5).
-
-    Unified logic: high miss = less likely to appear = safe for 五不中.
-      score = 100 + danger_pct * 0.6 - recent_freq * 8 * 0.4
-    Higher score = safer pick (more overdue + colder) → top-5 chosen for 五不中.
-    Strict time cutoff: at period T only draws[0..T-1] are visible.
-    """
-
-    def backtest(self, df: pd.DataFrame, pool_size: int = 39,
-                 top_n: int = 5, lookback: int = 500) -> Dict:
-        num_cols = [c for c in df.columns if c.startswith("n") and c[1:].isdigit()]
-        draws = [set(int(x) for x in row) for row in df[num_cols].values.tolist()]
-        n = len(draws)
-        min_warm = max(pool_size, 20)
-        empty = {"wins": 0, "losses": 0, "win_rate": 0.0,
-                 "max_win_streak": 0, "max_loss_streak": 0,
-                 "recent_20": [], "total_tested": 0}
-        if n < min_warm + 2:
-            return empty
-        start = max(min_warm, n - lookback - 1)
-
-        # Warmup: build cur_miss, gap_lists, max_miss through draws[0..start]
-        cur_miss:  Dict[int, int]       = {num: 0 for num in range(1, pool_size + 1)}
-        gap_lists: Dict[int, List[int]] = {num: [] for num in range(1, pool_size + 1)}
-        for i in range(start + 1):
-            for num in range(1, pool_size + 1):
-                if num in draws[i]:
-                    if cur_miss[num] > 0:
-                        gap_lists[num].append(cur_miss[num])
-                    cur_miss[num] = 0
-                else:
-                    cur_miss[num] += 1
-        max_miss: Dict[int, int] = {}
-        for num in range(1, pool_size + 1):
-            all_gaps = gap_lists[num] + ([cur_miss[num]] if cur_miss[num] > 0 else [])
-            max_miss[num] = max(all_gaps) if all_gaps else 0
-
-        results: List[bool] = []
-        for i in range(start, n - 1):
-            # recent_freq: appearances in draws[i-19..i] (up to 20 draws)
-            win_start = max(0, i - 19)
-            rec_freq: Dict[int, int] = {num: 0 for num in range(1, pool_size + 1)}
-            for j in range(win_start, i + 1):
-                for num in draws[j]:
-                    if 1 <= num <= pool_size:
-                        rec_freq[num] += 1
-
-            def _score(num: int, _cm=cur_miss, _mm=max_miss, _rf=rec_freq) -> float:
-                mm = _mm[num]
-                dp = min(_cm[num] / mm * 100.0 if mm > 0 else 0.0, 100.0)
-                return 100.0 + dp * 0.6 - _rf[num] * 8 * 0.4
-
-            top_nums = sorted(range(1, pool_size + 1), key=_score, reverse=True)[:top_n]
-            win = all(num not in draws[i + 1] for num in top_nums)
-            results.append(win)
-
-            # Advance state with draws[i+1]
-            for num in range(1, pool_size + 1):
-                if num in draws[i + 1]:
-                    if cur_miss[num] > 0:
-                        gap_lists[num].append(cur_miss[num])
-                        if cur_miss[num] > max_miss[num]:
-                            max_miss[num] = cur_miss[num]
-                    cur_miss[num] = 0
-                else:
-                    cur_miss[num] += 1
-
-        if not results:
-            return empty
-        wins   = sum(1 for r in results if r)
-        losses = len(results) - wins
-        win_rate = round(wins / len(results) * 100, 2)
-        max_win = max_loss = cw = cl = 0
-        for r in results:
-            if r:
-                cw += 1; cl = 0
-            else:
-                cl += 1; cw = 0
-            if cw > max_win:  max_win  = cw
-            if cl > max_loss: max_loss = cl
-        return {
-            "wins": wins, "losses": losses, "win_rate": win_rate,
-            "max_win_streak": max_win, "max_loss_streak": max_loss,
-            "recent_20": [1 if r else 0 for r in results[-20:]],
-            "total_tested": len(results),
-        }
-
-
-# ============================================================
-# SECTION 3.85 — MULTI-STRATEGY BACKTESTER  (v9.7)
-# ============================================================
-
-class MultiStrategyBacktester:
-    """Runs 4 scoring strategies + random baseline, ranks by win_rate and stability."""
-
-    STRATEGIES = [
-        {"id": "smart",   "label": "智能複合評分", "desc": "遺漏比例×0.6 + 低頻加成×0.4（遺漏越久越安全）"},
-        {"id": "miss",    "label": "純遺漏優先",   "desc": "當前遺漏值最高的 5 號"},
-        {"id": "freq",    "label": "純低頻優先",   "desc": "近20期出現最少的 5 號"},
-        {"id": "danger",  "label": "純遺漏比例優先", "desc": "逼近最大遺漏比例最高的 5 號（最冷）"},
-    ]
-    # Theoretical random baseline for 5-from-39: C(34,5)/C(39,5)
-    RANDOM_WIN_RATE = round(278256 / 575757 * 100, 1)  # ≈ 48.3%
-
-    def backtest_all(self, df: pd.DataFrame, pool_size: int = 39,
-                     top_n: int = 5, lookback: int = 300,
-                     segments: int = 5) -> List[Dict]:
-        num_cols = [c for c in df.columns if c.startswith("n") and c[1:].isdigit()]
-        draws = [set(int(x) for x in row) for row in df[num_cols].values.tolist()]
-        n = len(draws)
-        min_warm = max(pool_size, 20)
-        if n < min_warm + segments * 5:
-            return []
-
-        start = max(min_warm, n - lookback - 1)
-        # Warmup state
-        cur_miss: Dict[int, int]       = {num: 0 for num in range(1, pool_size + 1)}
-        gap_lists: Dict[int, List[int]] = {num: [] for num in range(1, pool_size + 1)}
-        for i in range(start + 1):
-            for num in range(1, pool_size + 1):
-                if num in draws[i]:
-                    if cur_miss[num] > 0:
-                        gap_lists[num].append(cur_miss[num])
-                    cur_miss[num] = 0
-                else:
-                    cur_miss[num] += 1
-        max_miss: Dict[int, int] = {
-            num: max(gap_lists[num] + ([cur_miss[num]] if cur_miss[num] > 0 else []), default=0)
-            for num in range(1, pool_size + 1)
-        }
-
-        # Collect per-period results for each strategy
-        all_results: Dict[str, List[bool]] = {s["id"]: [] for s in self.STRATEGIES}
-
-        for i in range(start, n - 1):
-            win_start = max(0, i - 19)
-            rec_freq: Dict[int, int] = {num: 0 for num in range(1, pool_size + 1)}
-            for j in range(win_start, i + 1):
-                for num in draws[j]:
-                    if 1 <= num <= pool_size:
-                        rec_freq[num] += 1
-
-            def _dp(num: int) -> float:
-                mm = max_miss[num]
-                return min(cur_miss[num] / mm * 100.0 if mm > 0 else 0.0, 100.0)
-
-            scores: Dict[str, Dict[int, float]] = {
-                "smart":  {num: 100.0 + _dp(num) * 0.6 - rec_freq[num] * 8 * 0.4
-                           for num in range(1, pool_size + 1)},
-                "miss":   {num: float(cur_miss[num]) for num in range(1, pool_size + 1)},
-                "freq":   {num: -float(rec_freq[num]) for num in range(1, pool_size + 1)},
-                "danger": {num: _dp(num) for num in range(1, pool_size + 1)},
-            }
-            for sid, sc in scores.items():
-                top_nums = sorted(range(1, pool_size + 1), key=lambda x: sc[x], reverse=True)[:top_n]
-                win = all(num not in draws[i + 1] for num in top_nums)
-                all_results[sid].append(win)
-
-            # Advance state
-            for num in range(1, pool_size + 1):
-                if num in draws[i + 1]:
-                    if cur_miss[num] > 0:
-                        gap_lists[num].append(cur_miss[num])
-                        if cur_miss[num] > max_miss[num]:
-                            max_miss[num] = cur_miss[num]
-                    cur_miss[num] = 0
-                else:
-                    cur_miss[num] += 1
-
-        output: List[Dict] = []
-        for strat in self.STRATEGIES:
-            raw = all_results[strat["id"]]
-            if not raw:
-                continue
-            wr = round(sum(raw) / len(raw) * 100, 1)
-            # Near-100 win rate for trend stability comparison
-            r100_slice = raw[-100:] if len(raw) >= 100 else []
-            recent_100_rate: Optional[float] = (
-                round(sum(r100_slice) / len(r100_slice) * 100, 1) if r100_slice else None
-            )
-            seg_size = max(len(raw) // segments, 1)
-            seg_rates = []
-            for s in range(segments):
-                chunk = raw[s * seg_size:(s + 1) * seg_size]
-                if chunk:
-                    seg_rates.append(round(sum(chunk) / len(chunk) * 100, 1))
-            import statistics as _stats
-            stability = round(_stats.stdev(seg_rates), 1) if len(seg_rates) >= 2 else 0.0
-            delta = round(wr - self.RANDOM_WIN_RATE, 1)
-            output.append({
-                **strat,
-                "win_rate": wr,
-                "total": len(raw),
-                "stability_std": stability,
-                "delta_vs_random": delta,
-                "recent_10": [1 if r else 0 for r in raw[-10:]],
-                "recent_100_rate": recent_100_rate,
-            })
-
-        # Sort by win_rate desc, stability asc
-        output.sort(key=lambda x: (-x["win_rate"], x["stability_std"]))
-        return output
-
-
-# ============================================================
-# SECTION 3.87 — EXCLUDE SCORE TUNER  (v9.7)
-# ============================================================
-
-class ExcludeScoreTuner:
-    """Backtests 5 weight presets for calcExcludeScore and returns the best."""
-
-    # Each preset: (dp_weight, freq_weight, latest_bonus, neighbor_bonus, cold_bonus)
-    PRESETS = [
-        {"id": "balanced", "label": "均衡型",
-         "dp": 0.35, "freq": 5, "latest": 25, "neighbor": 12, "cold": 10},
-        {"id": "heavy_dp", "label": "危險分主導",
-         "dp": 0.55, "freq": 3, "latest": 20, "neighbor": 8,  "cold": 8},
-        {"id": "heavy_freq", "label": "頻率主導",
-         "dp": 0.20, "freq": 9, "latest": 22, "neighbor": 10, "cold": 8},
-        {"id": "latest_focus", "label": "最新期重視",
-         "dp": 0.30, "freq": 4, "latest": 35, "neighbor": 18, "cold": 10},
-        {"id": "conservative", "label": "保守型",
-         "dp": 0.45, "freq": 6, "latest": 18, "neighbor": 8,  "cold": 6},
-    ]
-
-    def tune(self, df: pd.DataFrame, pool_size: int = 39,
-             top_n: int = 5, lookback: int = 300) -> Dict:
-        num_cols = [c for c in df.columns if c.startswith("n") and c[1:].isdigit()]
-        draws = [set(int(x) for x in row) for row in df[num_cols].values.tolist()]
-        n = len(draws)
-        min_warm = max(pool_size, 20)
-        empty: Dict = {"presets": [], "best_id": "", "best_label": ""}
-        if n < min_warm + 10:
-            return empty
-
-        start = max(min_warm, n - lookback - 1)
-        cur_miss:  Dict[int, int]       = {num: 0 for num in range(1, pool_size + 1)}
-        gap_lists: Dict[int, List[int]] = {num: [] for num in range(1, pool_size + 1)}
-        latest_draw_nums: set            = set()
-        for i in range(start + 1):
-            latest_draw_nums = draws[i]
-            for num in range(1, pool_size + 1):
-                if num in draws[i]:
-                    if cur_miss[num] > 0:
-                        gap_lists[num].append(cur_miss[num])
-                    cur_miss[num] = 0
-                else:
-                    cur_miss[num] += 1
-        max_miss: Dict[int, int] = {
-            num: max(gap_lists[num] + ([cur_miss[num]] if cur_miss[num] > 0 else []), default=0)
-            for num in range(1, pool_size + 1)
-        }
-        # Neighbors of latest draw (±1, ±2, ±10)
-        def _neighbors(nums: set) -> set:
-            nb: set = set()
-            for n_ in nums:
-                for d in (1, -1, 2, -2, 10, -10):
-                    x = n_ + d
-                    if 1 <= x <= pool_size and x not in nums:
-                        nb.add(x)
-            return nb
-
-        per_preset: Dict[str, List[bool]] = {p["id"]: [] for p in self.PRESETS}
-
-        for i in range(start, n - 1):
-            win_start = max(0, i - 19)
-            rec_freq: Dict[int, int] = {num: 0 for num in range(1, pool_size + 1)}
-            for j in range(win_start, i + 1):
-                for num in draws[j]:
-                    if 1 <= num <= pool_size:
-                        rec_freq[num] += 1
-            neighbors = _neighbors(latest_draw_nums)
-            for p in self.PRESETS:
-                def _exc(num: int, _cm=cur_miss, _mm=max_miss, _rf=rec_freq,
-                         _ld=latest_draw_nums, _nb=neighbors, _p=p) -> float:
-                    mm = _mm[num]; cm = _cm[num]; rf = _rf[num]
-                    dp = min(cm / mm * 100.0 if mm > 0 else 0.0, 100.0)
-                    s = 0.0
-                    if cm <= 3: s += 20      # 熱門：剛出過，短期易連開 → 危險
-                    elif cm <= 8: s += 10    # 微熱
-                    s += min(rf * _p["freq"], 25)  # 近期高頻 → 危險
-                    s -= dp * _p["dp"]       # 遺漏越久 → 越不會出 → 安全 → 降低排除分
-                    if num in _ld: s += _p["latest"]
-                    if num in _nb: s += _p["neighbor"]
-                    if cm > 15 and rf == 0: s -= _p["cold"]  # 極冷號 → 最安全 → 大幅降低排除分
-                    return s
-                # High exclude score = dangerous → AVOID → pick opposite (low score = safe)
-                # We test: exclude top-5-by-score, check 五不中 on remaining
-                # i.e., pick 5 with LOWEST exclude score as safe
-                top5 = sorted(range(1, pool_size + 1), key=_exc)[:top_n]
-                win = all(num not in draws[i + 1] for num in top5)
-                per_preset[p["id"]].append(win)
-            # Advance
-            latest_draw_nums = draws[i + 1]
-            for num in range(1, pool_size + 1):
-                if num in draws[i + 1]:
-                    if cur_miss[num] > 0:
-                        gap_lists[num].append(cur_miss[num])
-                        if cur_miss[num] > max_miss[num]:
-                            max_miss[num] = cur_miss[num]
-                    cur_miss[num] = 0
-                else:
-                    cur_miss[num] += 1
-
-        results = []
-        for p in self.PRESETS:
-            raw = per_preset[p["id"]]
-            if not raw:
-                continue
-            wr = round(sum(raw) / len(raw) * 100, 1)
-            delta = round(wr - MultiStrategyBacktester.RANDOM_WIN_RATE, 1)
-            results.append({**p, "win_rate": wr, "total": len(raw),
-                            "delta": delta,
-                            "recent_10": [1 if r else 0 for r in raw[-10:]]})
-        results.sort(key=lambda x: -x["win_rate"])
-        best = results[0] if results else {"id": "balanced", "label": "均衡型"}
-        return {"presets": results, "best_id": best["id"], "best_label": best["label"]}
 
 
 # ============================================================
@@ -2305,16 +1983,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
 .oe-color-panel{border-radius:.85rem;padding:.8rem 1rem;margin-bottom:.75rem;
   background:#fff;border:1px solid #e2e8f0}
 
-/* Strategy backtest panel (v9.0) */
-.strat-panel{border-radius:.85rem;padding:.8rem 1rem;margin-bottom:.75rem;
-  background:#fff;border:1px solid #e2e8f0}
-.strat-body{margin-top:.6rem}
-.strat-stats-row{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.5rem}
-.strat-stat-card{flex:1;min-width:52px;border-radius:.55rem;padding:.45rem .35rem;
-  border:1px solid #e2e8f0;text-align:center}
-.strat-stat-val{font-size:1.1rem;font-weight:900;line-height:1}
-.strat-stat-lbl{font-size:.58rem;color:#64748b;margin-top:.18rem;font-weight:600}
-
 /* Picker mode toggle bar (v9.0) */
 .pk-mode-bar{display:flex;align-items:center;flex-wrap:wrap;gap:.22rem;
   margin-bottom:.35rem;padding:.28rem .4rem;background:#f8fafc;
@@ -2412,8 +2080,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             + self._build_consec_html(key, data.get("consec_result", {}), data["config"]["theme"])
             + self.build_analysis_html(key, data)
             + self._build_oe_color_panel(key, data.get("oe_color_stats", {}), data["config"]["theme"])
-            + self._build_strat_panel(key, data.get("strategy_bt", {}), data["config"]["theme"],
-                                        mbt=data.get("multi_bt"), tun=data.get("excl_tune"))
             + self._build_heat_prob_panel(key, data.get("recent_heat_prob", {}), data["config"]["theme"])
             + '</div>'
         )
@@ -2439,11 +2105,9 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             key, data["miss_result"], data["period_result"],
             nhr=data.get("num_history"),
             oec=data.get("oe_color_stats"),
-            sbt=data.get("strategy_bt"),
             rhp=data.get("recent_heat_prob"),
             gaps_in=gaps,
             gap_affects_recent=gap_affects_recent,
-            mbt_in=data.get("multi_bt"),
             rev_oe_in=rev_oe,
         )
         return inner + data_script
@@ -2881,209 +2545,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '</div>'
         )
 
-    # ── Strategy Backtest Panel (v9.5) ───────────────────────
-
-    def _build_strat_panel(self, key: str, sbt: Dict, theme: Dict,
-                           mbt: Optional[List] = None,
-                           tun: Optional[Dict] = None) -> str:
-        if not sbt or sbt.get("total_tested", 0) == 0:
-            return ""
-        p          = theme["primary"]
-        wins       = sbt.get("wins", 0)
-        losses     = sbt.get("losses", 0)
-        win_rate   = sbt.get("win_rate", 0.0)
-        max_win    = sbt.get("max_win_streak", 0)
-        max_loss   = sbt.get("max_loss_streak", 0)
-        total      = sbt.get("total_tested", 0)
-        recent_20  = sbt.get("recent_20", [])
-
-        rate_c = "#16a34a" if win_rate >= 70 else ("#d97706" if win_rate >= 55 else "#dc2626")
-        sparkline = ""
-        for r in recent_20:
-            col = "#16a34a" if r == 1 else "#dc2626"
-            sparkline += (
-                '<span style="display:inline-block;width:10px;height:18px;'
-                'background:' + col + ';border-radius:2px;margin:.5px" title="'
-                + ('勝' if r == 1 else '敗') + '"></span>'
-            )
-
-        return (
-            '<div id="strat-' + key + '" class="strat-panel">'
-            '<details>'
-            '<summary style="display:flex;align-items:center;gap:.4rem;cursor:pointer;'
-            'list-style:none;user-select:none;padding:.1rem .2rem">'
-            '<span style="font-size:1rem">📊</span>'
-            '<h3 style="font-size:.88rem;font-weight:900;color:' + p + '">'
-            '策略批量回測 — 低危險度評分 Top5 歷史驗證</h3>'
-            '<span class="caret" style="font-size:.6rem;transition:transform .2s;margin-left:.3rem">▶</span>'
-            '<span style="font-size:.62rem;color:#94a3b8;margin-left:auto">共測 ' + str(total) + ' 期</span>'
-            '</summary>'
-            '<div class="strat-body">'
-            '<div class="strat-stats-row">'
-            '<div class="strat-stat-card" style="background:#f0fdf4;border-color:#86efac">'
-            '<div class="strat-stat-val" style="color:#16a34a">' + str(wins) + '</div>'
-            '<div class="strat-stat-lbl">勝（0中）</div>'
-            '</div>'
-            '<div class="strat-stat-card" style="background:#fff1f2;border-color:#fca5a5">'
-            '<div class="strat-stat-val" style="color:#dc2626">' + str(losses) + '</div>'
-            '<div class="strat-stat-lbl">敗（有中）</div>'
-            '</div>'
-            '<div class="strat-stat-card" style="background:#f8fafc;border-color:#e2e8f0">'
-            '<div class="strat-stat-val" style="color:' + rate_c + '">' + str(win_rate) + '%</div>'
-            '<div class="strat-stat-lbl">勝率</div>'
-            '</div>'
-            '<div class="strat-stat-card" style="background:#f0fdf4;border-color:#86efac">'
-            '<div class="strat-stat-val" style="color:#16a34a">' + str(max_win) + '</div>'
-            '<div class="strat-stat-lbl">最長連勝</div>'
-            '</div>'
-            '<div class="strat-stat-card" style="background:#fff1f2;border-color:#fca5a5">'
-            '<div class="strat-stat-val" style="color:#dc2626">' + str(max_loss) + '</div>'
-            '<div class="strat-stat-lbl">最長連敗</div>'
-            '</div>'
-            '</div>'
-            '<div style="margin-top:.6rem">'
-            '<div style="font-size:.68rem;font-weight:700;color:#64748b;margin-bottom:.3rem">'
-            '最近 ' + str(len(recent_20)) + ' 期走勢（綠=勝 紅=敗）</div>'
-            '<div style="display:flex;flex-wrap:wrap;gap:0;align-items:flex-end">' + sparkline + '</div>'
-            '</div>'
-            '<div style="font-size:.62rem;color:#94a3b8;margin-top:.45rem;line-height:1.5">'
-            '策略邏輯（v10.0）：每期以智能複合評分（100 − 危險分×0.6 − 近期頻率×8×0.4）選出前5高分號碼，嚴格限用截止期前數據，測試五選不中勝率。僅作歷史統計參考，不保證未來表現。'
-            '</div>'
-            + self._build_strat_ranking(mbt or [], MultiStrategyBacktester.RANDOM_WIN_RATE)
-            + self._build_excl_tune_table(tun or {})
-            + '</div>'
-            '</details>'
-            '</div>'
-        )
-
-    def _build_strat_ranking(self, mbt: List, random_wr: float) -> str:
-        if not mbt:
-            return ""
-        medals = ["🥇", "🥈", "🥉", "4.", "5."]
-        rows_html = ""
-        for idx, s in enumerate(mbt):
-            wr    = s["win_rate"]
-            delta = s.get("delta_vs_random", round(wr - random_wr, 1))
-            stab  = s.get("stability_std", 0)
-            r100  = s.get("recent_100_rate")
-            spark = "".join(
-                '<span style="display:inline-block;width:6px;height:12px;'
-                'background:' + ("#16a34a" if r == 1 else "#dc2626") + ';'
-                'border-radius:1px;margin:.5px"></span>'
-                for r in s.get("recent_10", [])
-            )
-            wr_c    = "#16a34a" if wr >= 70 else ("#d97706" if wr >= 55 else "#dc2626")
-            delta_c = "#16a34a" if delta >= 10 else ("#d97706" if delta >= 0 else "#dc2626")
-            # Trend stability: compare near-300 (win_rate) vs near-100 (recent_100_rate)
-            if r100 is None:
-                trend_lbl = "樣本不足"; trend_c = "#94a3b8"
-            else:
-                diff100 = round(r100 - wr, 1)
-                diff_str = ("+" if diff100 >= 0 else "") + str(diff100) + "%"
-                if abs(diff100) <= 5:
-                    trend_lbl = "穩定"; trend_c = "#16a34a"
-                elif diff100 > 5:
-                    trend_lbl = "近期轉強 " + diff_str; trend_c = "#2563eb"
-                else:
-                    trend_lbl = "近期轉弱 " + diff_str; trend_c = "#d97706"
-            # Wilson 95% CI
-            n_total = s.get("total", 0)
-            p_val   = wr / 100.0
-            z       = 1.96
-            if n_total >= 3:
-                denom  = 1 + z * z / n_total
-                center = (p_val + z * z / (2 * n_total)) / denom
-                margin = z * (p_val * (1 - p_val) / n_total + z * z / (4 * n_total * n_total)) ** 0.5 / denom
-                ci_lo  = round(max(0.0, (center - margin) * 100), 1)
-                ci_hi  = round(min(100.0, (center + margin) * 100), 1)
-                half   = round((ci_hi - ci_lo) / 2, 1)
-                ci_html = '<br><span style="font-size:.58rem;color:#94a3b8">±' + str(half) + '%</span>'
-                if n_total < 50:
-                    ci_html += '<br><span style="font-size:.55rem;color:#94a3b8">⚠️樣本不足</span>'
-            else:
-                ci_html = '<br><span style="font-size:.58rem;color:#94a3b8">—</span>'
-            rows_html += (
-                '<tr style="border-bottom:1px solid #f1f5f9">'
-                '<td style="padding:.22rem .35rem;font-size:.7rem;font-weight:700">'
-                + medals[idx] + ' ' + s["label"] + '</td>'
-                '<td style="padding:.22rem .35rem;font-size:.72rem;font-weight:800;color:' + wr_c + '">'
-                + str(wr) + '%' + ci_html + '</td>'
-                '<td style="padding:.22rem .35rem;font-size:.68rem;color:' + delta_c + '">'
-                + ('+' if delta >= 0 else '') + str(delta) + '%</td>'
-                '<td style="padding:.22rem .35rem;font-size:.63rem;color:' + trend_c + ';font-weight:700">'
-                + trend_lbl + '</td>'
-                '<td style="padding:.22rem .35rem">' + spark + '</td>'
-                '</tr>'
-            )
-        return (
-            '<div style="margin-top:.75rem">'
-            '<div style="font-size:.68rem;font-weight:800;color:#334155;margin-bottom:.3rem">'
-            '📈 策略排行榜（近300期 · 隨機基準 ≈ ' + str(random_wr) + '%）</div>'
-            '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;'
-            'font-size:.65rem">'
-            '<thead><tr style="background:#f8fafc">'
-            '<th style="padding:.18rem .35rem;text-align:left;color:#475569">策略</th>'
-            '<th style="padding:.18rem .35rem;text-align:left;color:#475569">近300勝率</th>'
-            '<th style="padding:.18rem .35rem;text-align:left;color:#475569">vs隨機</th>'
-            '<th style="padding:.18rem .35rem;text-align:left;color:#475569">穩定度</th>'
-            '<th style="padding:.18rem .35rem;text-align:left;color:#475569">近10期</th>'
-            '</tr></thead>'
-            '<tbody>' + rows_html + '</tbody>'
-            '</table></div>'
-            '<div style="font-size:.57rem;color:#94a3b8;margin-top:.3rem">'
-            '穩定度 = 近100期 vs 近300期勝率差距；差距 ≤5% 為穩定，正差為轉強，負差為轉弱。</div>'
-            '</div>'
-        )
-
-    def _build_excl_tune_table(self, tun: Dict) -> str:
-        presets = tun.get("presets", [])
-        best_id = tun.get("best_id", "")
-        if not presets:
-            return ""
-        rows_html = ""
-        for p in presets:
-            wr    = p["win_rate"]
-            delta = p.get("delta", 0)
-            is_best = p["id"] == best_id
-            bg = "background:#f0fdf4;" if is_best else ""
-            wr_c = "#16a34a" if wr >= 70 else ("#d97706" if wr >= 55 else "#dc2626")
-            delta_c = "#16a34a" if delta >= 10 else ("#d97706" if delta >= 0 else "#dc2626")
-            spark = "".join(
-                '<span style="display:inline-block;width:5px;height:10px;'
-                'background:' + ("#16a34a" if r == 1 else "#dc2626") + ';'
-                'border-radius:1px;margin:.3px"></span>'
-                for r in p.get("recent_10", [])
-            )
-            rows_html += (
-                '<tr style="border-bottom:1px solid #f1f5f9;' + bg + '">'
-                '<td style="padding:.2rem .32rem;font-size:.67rem;font-weight:'
-                + ('800' if is_best else '500') + '">'
-                + ('★ ' if is_best else '') + p["label"] + '</td>'
-                '<td style="padding:.2rem .32rem;font-size:.7rem;font-weight:700;color:' + wr_c + '">'
-                + str(wr) + '%</td>'
-                '<td style="padding:.2rem .32rem;font-size:.65rem;color:' + delta_c + '">'
-                + ('+' if delta >= 0 else '') + str(delta) + '%</td>'
-                '<td style="padding:.2rem .32rem">' + spark + '</td>'
-                '</tr>'
-            )
-        return (
-            '<div style="margin-top:.6rem">'
-            '<div style="font-size:.68rem;font-weight:800;color:#334155;margin-bottom:.3rem">'
-            '🎯 排除分權重回測校準（近300期 · 當前最佳：' + tun.get("best_label", "") + '）</div>'
-            '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
-            '<thead><tr style="background:#f8fafc">'
-            '<th style="padding:.15rem .32rem;text-align:left;font-size:.63rem;color:#475569">預設組合</th>'
-            '<th style="padding:.15rem .32rem;text-align:left;font-size:.63rem;color:#475569">勝率</th>'
-            '<th style="padding:.15rem .32rem;text-align:left;font-size:.63rem;color:#475569">vs隨機</th>'
-            '<th style="padding:.15rem .32rem;text-align:left;font-size:.63rem;color:#475569">近10期</th>'
-            '</tr></thead>'
-            '<tbody>' + rows_html + '</tbody>'
-            '</table></div>'
-            '<div style="font-size:.6rem;color:#94a3b8;margin-top:.22rem;line-height:1.5">'
-            '各預設以排除分最低的5個號碼作為選號組合進行五不中回測，勝率越高表示該組合越能避開開獎號碼。'
-            '</div></div>'
-        )
-
     # ── Recent Heat Probability Panel (v9.6) ─────────────────
 
     def _build_heat_prob_panel(self, key: str, rhp: Dict, theme: Dict) -> str:
@@ -3217,11 +2678,9 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
     def _build_picker_data_script(self, key: str, mr: Dict, pr: Dict,
                                    nhr: Optional[Dict] = None,
                                    oec: Optional[Dict] = None,
-                                   sbt: Optional[Dict] = None,
                                    rhp: Optional[Dict] = None,
                                    gaps_in: Optional[List] = None,
                                    gap_affects_recent: bool = False,
-                                   mbt_in: Optional[List] = None,
                                    rev_oe_in: Optional[Dict] = None) -> str:
         """Embed JS globals for all analysis data."""
         current_misses = mr["current_misses"]
@@ -3231,7 +2690,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
         period_json = _json.dumps(pr.get("top8_lowest", []))
         nhr_json    = _json.dumps({str(k): v for k, v in (nhr or {}).items()})
         oec_json    = _json.dumps(oec or {})
-        sbt_json    = _json.dumps(sbt or {})
         # Serialize rhp.numbers with string keys for JS lookup
         rhp_nums    = {str(k): v for k, v in (rhp or {}).get("numbers", {}).items()}
         rhp_json    = _json.dumps(rhp_nums)
@@ -3239,7 +2697,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             "count": len(gaps_in or []),
             "affectsRecent": gap_affects_recent,
         })
-        mbt_json    = _json.dumps(mbt_in or [])
         rev_oe_json = _json.dumps(rev_oe_in or {})
         return (
             '<script>'
@@ -3255,14 +2712,10 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             'window._NUM_HIST_DATA["' + key + '"]=' + nhr_json + ';'
             'window._OE_COLOR_DATA=window._OE_COLOR_DATA||{};'
             'window._OE_COLOR_DATA["' + key + '"]=' + oec_json + ';'
-            'window._STRAT_DATA=window._STRAT_DATA||{};'
-            'window._STRAT_DATA["' + key + '"]=' + sbt_json + ';'
             'window._HEAT_PROB_DATA=window._HEAT_PROB_DATA||{};'
             'window._HEAT_PROB_DATA["' + key + '"]=' + rhp_json + ';'
             'window._GAP_DATA=window._GAP_DATA||{};'
             'window._GAP_DATA["' + key + '"]=' + gap_json + ';'
-            'window._MULTI_BT_DATA=window._MULTI_BT_DATA||{};'
-            'window._MULTI_BT_DATA["' + key + '"]=' + mbt_json + ';'
             'window._REV_OE_DATA=window._REV_OE_DATA||{};'
             'window._REV_OE_DATA["' + key + '"]=' + rev_oe_json + ';'
             '</script>'
@@ -3319,12 +2772,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<div id="pk-risk-' + key + '"></div>'
             # ── OE/Color guide placeholder (v10.2)
             '<div id="pk-oe-guide-' + key + '" style="margin:.1rem 0 .18rem"></div>'
-            # ── Manual combo backtest
-            '<div style="display:flex;gap:.22rem;margin-top:.22rem;flex-wrap:wrap">'
-            '<button class="pk-mode-btn" style="font-size:.6rem;padding:.18rem .38rem;color:#6366f1" '
-            'onclick="backtestCurrentCombo(\'' + key + '\')">📊 回測此組合</button>'
-            '</div>'
-            '<div id="pk-combo-bt-' + key + '"></div>'
             '<div style="display:flex;gap:.3rem;align-items:center;margin-top:.3rem">'
             '<input id="pk-note-' + key + '" class="pk-note-input" style="flex:1" type="text" '
             'placeholder="備註（可空）">'
@@ -3934,9 +3381,7 @@ function _btStore(key,d){
   if(d.period_data){    window._PERIOD_DATA=window._PERIOD_DATA||{};    window._PERIOD_DATA[key]=d.period_data; }
   if(d.num_hist_data){  window._NUM_HIST_DATA=window._NUM_HIST_DATA||{};  window._NUM_HIST_DATA[key]=d.num_hist_data; }
   if(d.oe_color_data){  window._OE_COLOR_DATA=window._OE_COLOR_DATA||{};  window._OE_COLOR_DATA[key]=d.oe_color_data; }
-  if(d.strat_data){     window._STRAT_DATA=window._STRAT_DATA||{};     window._STRAT_DATA[key]=d.strat_data; }
   if(d.heat_prob_data){ window._HEAT_PROB_DATA=window._HEAT_PROB_DATA||{}; window._HEAT_PROB_DATA[key]=d.heat_prob_data; }
-  if(d.multi_bt_data){  window._MULTI_BT_DATA=window._MULTI_BT_DATA||{};  window._MULTI_BT_DATA[key]=d.multi_bt_data; }
   if(d.rev_oe_data){    window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
 }
 
@@ -5127,59 +4572,6 @@ function renderSelectionRiskSummary(key){
   renderOEColorGuide(key);
 }
 
-/* ── backtestCurrentCombo: 自訂組合歷史回測（v10.1）── */
-function backtestCurrentCombo(key){
-  var sel=_pickerSel[key]||[];
-  if(sel.length<5){alert('請先選滿5個號碼');return;}
-  var drawData=_drawDataFor(key);
-  var checkN=Math.min(drawData.length,300);
-  if(checkN<10){alert('歷史資料不足');return;}
-  var wins=0;var resultArr=[];
-  for(var i=0;i<checkN;i++){
-    var d=drawData[i];
-    if(!d||!d.numbers)continue;
-    var hit=sel.some(function(n){return d.numbers.indexOf(n)!==-1;});
-    resultArr.push(hit?0:1);
-    if(!hit)wins++;
-  }
-  var total=resultArr.length;
-  var wr=total>0?Math.round(wins/total*1000)/10:0;
-  var rnd=48.3;
-  var diff=Math.round((wr-rnd)*10)/10;
-  var recent10=resultArr.slice(0,10);
-  var spark=recent10.map(function(r){
-    return '<span style="display:inline-block;width:6px;height:12px;background:'
-      +(r?'#16a34a':'#dc2626')+';border-radius:1px;margin:.5px"></span>';
-  }).join('');
-  // Wilson CI
-  var p=wr/100;var z=1.96;var ci_html='';
-  if(total>=3){
-    var denom=1+z*z/total;
-    var center=(p+z*z/(2*total))/denom;
-    var margin=z*Math.sqrt(p*(1-p)/total+z*z/(4*total*total))/denom;
-    var half=Math.round((Math.min(1,center+margin)-Math.max(0,center-margin))*50*10)/10;
-    ci_html=' <span style="font-size:.56rem;color:#94a3b8">±'+half+'%</span>';
-  }
-  var wr_c=wr>=55?'#16a34a':wr>=45?'#d97706':'#dc2626';
-  var diff_c=diff>=5?'#16a34a':diff>=-2?'#64748b':'#dc2626';
-  var el=document.getElementById('pk-combo-bt-'+key);
-  if(!el)return;
-  el.innerHTML='<div style="margin-top:.22rem;padding:.22rem .32rem;border:1px solid #ddd6fe;'
-    +'border-radius:.4rem;background:#faf5ff">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.1rem">'
-    +'<span style="font-size:.6rem;font-weight:800;color:#5b21b6">📊 組合歷史回測（近'+checkN+'期）</span>'
-    +'<button onclick="document.getElementById(\'pk-combo-bt-'+key+'\').innerHTML=\'\'" '
-    +'style="font-size:.55rem;color:#94a3b8;background:none;border:none;cursor:pointer">✕</button>'
-    +'</div>'
-    +'<div style="display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap">'
-    +'<span style="font-size:.78rem;font-weight:900;color:'+wr_c+'">'+wr+'%</span>'+ci_html
-    +'<span style="font-size:.6rem;color:'+diff_c+'">vs隨機 '+(diff>=0?'+':'')+diff+'%</span>'
-    +'<span style="font-size:.6rem;color:#64748b">'+wins+'/'+total+'</span>'
-    +'</div>'
-    +'<div style="display:flex;gap:0;align-items:flex-end;margin-top:.12rem">'+spark+'</div>'
-    +'</div>';
-}
-
 /* ── renderPersonalWinRate: 個人勝率儀表板（v10.1）── */
 function renderPersonalWinRate(key){
   var el=document.getElementById('pk-wr-'+key);
@@ -5200,9 +4592,7 @@ function renderPersonalWinRate(key){
   });
   if(settled===0){el.innerHTML='';return;}
   var wr=Math.round(wins/settled*1000)/10;
-  var mbtList=window._MULTI_BT_DATA&&window._MULTI_BT_DATA[key]||[];
   var btRef=48.3;
-  for(var i=0;i<mbtList.length;i++){if(mbtList[i].id==='smart'){btRef=mbtList[i].win_rate;break;}}
   var diff=Math.round((wr-btRef)*10)/10;
   var wr_c=wr>=60?'#16a34a':wr>=45?'#d97706':'#dc2626';
   var diff_c=diff>=5?'#16a34a':diff>=-5?'#64748b':'#dc2626';
@@ -5590,9 +4980,6 @@ class LotteryAnalyzer:
         self.consec_an  = ConsecutiveDrawAnalyzer()
         self.num_hist_an  = NumberHistoryAnalyzer()
         self.oe_color_an  = OEColorStatsAnalyzer()
-        self.strategy_bt   = StrategyBacktester()
-        self.multi_bt      = MultiStrategyBacktester()
-        self.excl_tuner    = ExcludeScoreTuner()
         self.heat_prob_an  = RecentHeatProbabilityAnalyzer()
         self.reporter      = HTMLReportGenerator()
 
@@ -5614,9 +5001,6 @@ class LotteryAnalyzer:
             cr  = self.consec_an.analyze(df, cfg["pool_size"])
             nhr = self.num_hist_an.analyze(df, cfg["pool_size"])
             oec = self.oe_color_an.analyze(df, cfg["pick_count"])
-            sbt = self.strategy_bt.backtest(df, cfg["pool_size"], lookback=500)
-            mbt = self.multi_bt.backtest_all(df, cfg["pool_size"], lookback=300)
-            tun = self.excl_tuner.tune(df, cfg["pool_size"], lookback=300)
             rhp = self.heat_prob_an.analyze(df, cfg["pool_size"])
             gaps = self.loader.detect_gaps(df, cfg.get("draws_per_day", 1))
             results[key] = {
@@ -5628,9 +5012,6 @@ class LotteryAnalyzer:
                 "consec_result":     cr,
                 "num_history":       nhr,
                 "oe_color_stats":    oec,
-                "strategy_bt":       sbt,
-                "multi_bt":          mbt,
-                "excl_tune":         tun,
                 "recent_heat_prob":  rhp,
                 "data_gaps":         gaps,
                 "min_date":          df["date"].min().strftime("%Y-%m-%d"),
@@ -5652,9 +5033,6 @@ class LotteryAnalyzer:
         cr  = self.consec_an.analyze(df, cfg["pool_size"])
         nhr = self.num_hist_an.analyze(df, cfg["pool_size"])
         oec = self.oe_color_an.analyze(df, cfg["pick_count"])
-        sbt = self.strategy_bt.backtest(df, cfg["pool_size"])
-        mbt = self.multi_bt.backtest_all(df, cfg["pool_size"], lookback=300)
-        tun = self.excl_tuner.tune(df, cfg["pool_size"], lookback=300)
         rhp = self.heat_prob_an.analyze(df, cfg["pool_size"])
         gaps = self.loader.detect_gaps(df, cfg.get("draws_per_day", 1))
         return {
@@ -5666,9 +5044,6 @@ class LotteryAnalyzer:
             "consec_result":     cr,
             "num_history":       nhr,
             "oe_color_stats":    oec,
-            "strategy_bt":       sbt,
-            "multi_bt":          mbt,
-            "excl_tune":         tun,
             "recent_heat_prob":  rhp,
             "data_gaps":         gaps,
             "min_date":          df["date"].min().strftime("%Y-%m-%d"),
@@ -5929,7 +5304,6 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
             )
             nhr         = result_data.get("num_history", {})
             oec         = result_data.get("oe_color_stats", {})
-            sbt         = result_data.get("strategy_bt", {})
             rhp         = result_data.get("recent_heat_prob", {})
             miss_data   = {str(k): v
                            for k, v in result_data["miss_result"]["current_misses"].items()}
@@ -5949,9 +5323,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 "period_data":      period_data,
                 "num_hist_data":    {str(k): v for k, v in nhr.items()},
                 "oe_color_data":    oec,
-                "strat_data":       sbt,
                 "heat_prob_data":   rhp_nums,
-                "multi_bt_data":    result_data.get("multi_bt", []),
                 "rev_oe_data":      rev_oe_resp or {},
             }
             if not is_hist:
