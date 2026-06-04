@@ -454,6 +454,23 @@ const NOTE_ODDS_MAP = {
   '紐約晚盤':   1.0,
 };
 const DEFAULT_ODDS = 1.0;
+let dbSupportsOddsColumn = true;
+
+function parseOddsValue(value) {
+  const num = parseFloat(value);
+  return Number.isFinite(num) && num >= 1 ? round2(num) : DEFAULT_ODDS;
+}
+
+function getSupabaseErrorText(error) {
+  return [error?.message, error?.details, error?.hint, error?.code]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function isMissingOddsColumnError(error) {
+  const text = getSupabaseErrorText(error);
+  return /odds/i.test(text) && /(column|schema cache|not find|does not exist|PGRST204)/i.test(text);
+}
 
 // 依備註文字查詢對應賠率（模糊包含匹配，未命中則回傳預設值）
 function getOddsForNote(note) {
@@ -726,7 +743,7 @@ function dbToRecord(r) {
   return normalizeRecordBalanceFields({ id: r.id, projectId: r.project_id, date: r.date, project: r.project,
     initBal: r.init_bal, pct: r.pct, bet: r.bet, pnl: r.pnl, afterBal: r.after_bal,
     status: r.status, note: r.note || '',
-    odds: r.odds ?? DEFAULT_ODDS });  // 舊紀錄 odds 為 null 時 fallback 1.0
+    odds: parseOddsValue(r.odds ?? getOddsForNote(r.note)) });  // 舊紀錄 odds 為 null 時依備註 fallback
 }
 
 // camelCase JS → snake_case DB row
@@ -736,11 +753,21 @@ function projectToDb(p, sortOrder) {
     initial_capital: p.initialCapital, current_balance: p.currentBalance,
     slider_pct: p.sliderPct, manual_bet: p.manualBet, manual_pct: p.manualPct };
 }
-function recordToDb(r) {
-  return { id: r.id, project_id: r.projectId || null, date: r.date, project: r.project,
+function recordToDb(r, options = {}) {
+  const row = { id: r.id, project_id: r.projectId || null, date: r.date, project: r.project,
     init_bal: r.initBal, pct: r.pct, bet: r.bet, pnl: r.pnl ?? null,
-    after_bal: r.afterBal ?? null, status: r.status, note: r.note || '',
-    odds: r.odds ?? DEFAULT_ODDS };
+    after_bal: r.afterBal ?? null, status: r.status, note: r.note || '' };
+  if (options.includeOdds !== false && dbSupportsOddsColumn) {
+    row.odds = parseOddsValue(r.odds ?? getOddsForNote(r.note));
+  }
+  return row;
+}
+
+function recordUpdateToDb(r, options = {}) {
+  const row = recordToDb(r, options);
+  delete row.id;
+  delete row.project_id;
+  return row;
 }
 
 async function db_upsertProject(proj) {
@@ -768,30 +795,32 @@ async function db_deleteProject(id) {
 async function db_insertRecord(rec) {
   cache.records.unshift(rec);
   if (isCloud()) {
-    const { error } = await sb.from('betting_records').insert(recordToDb(rec));
-    if (error) showToast('⚠️ 紀錄新增失敗：' + error.message, 'error');
+    let { error } = await sb.from('betting_records').insert(recordToDb(rec));
+    if (error && isMissingOddsColumnError(error)) {
+      dbSupportsOddsColumn = false;
+      ({ error } = await sb.from('betting_records').insert(recordToDb(rec, { includeOdds: false })));
+      if (!error) showToast('已用相容模式儲存；Supabase 尚未新增賠率欄位', 'info');
+    }
+    if (error) {
+      cache.records = cache.records.filter(r => r.id !== rec.id);
+      throw new Error(error.message || '紀錄新增失敗');
+    }
   } else {
     writeCacheToLocalStorage();
   }
+  return true;
 }
 
 async function db_updateRecord(rec) {
   const idx = cache.records.findIndex(r => r.id === rec.id);
   if (idx >= 0) cache.records[idx] = rec;
   if (isCloud()) {
-    // 完整欄位寫入，確保 date / bet 等所有修改都同步到雲端
-    const { error } = await sb.from('betting_records').update({
-      date:     rec.date     || '',
-      project:  rec.project  || '',
-      init_bal: rec.initBal  ?? null,
-      pct:      rec.pct      ?? null,
-      bet:      rec.bet      ?? null,
-      pnl:      rec.pnl      ?? null,
-      after_bal:rec.afterBal ?? null,
-      status:   rec.status,
-      note:     rec.note     || '',
-      odds:     rec.odds     ?? DEFAULT_ODDS
-    }).eq('id', rec.id);
+    let { error } = await sb.from('betting_records').update(recordUpdateToDb(rec)).eq('id', rec.id);
+    if (error && isMissingOddsColumnError(error)) {
+      dbSupportsOddsColumn = false;
+      ({ error } = await sb.from('betting_records').update(recordUpdateToDb(rec, { includeOdds: false })).eq('id', rec.id));
+      if (!error) showToast('已用相容模式更新；Supabase 尚未新增賠率欄位', 'info');
+    }
     if (error) throw new Error('紀錄寫入失敗：' + error.message);
   } else {
     writeCacheToLocalStorage();
@@ -1627,10 +1656,12 @@ async function confirmBet(id) {
   const p = cache.projects.find(p => p.id === id);
   if (!p) return;
   const bal      = parseFloat(p.currentBalance) || 0;
-  const note     = document.getElementById(`pi-${id}-note`).value.trim();
-  const betDate  = document.getElementById(`pi-${id}-bet-date`).value || getTodayStr();
-  const oddsRaw  = parseFloat(document.getElementById(`pi-${id}-odds`)?.value);
-  const betOdds  = (isNaN(oddsRaw) || oddsRaw < 1) ? DEFAULT_ODDS : round2(oddsRaw);
+  const noteEl   = document.getElementById(`pi-${id}-note`);
+  const dateEl   = document.getElementById(`pi-${id}-bet-date`);
+  const oddsEl   = document.getElementById(`pi-${id}-odds`);
+  const note     = noteEl ? noteEl.value.trim() : '';
+  const betDate  = dateEl?.value || getTodayStr();
+  const betOdds  = parseOddsValue(oddsEl?.value || getOddsForNote(note));
   const mb       = parseFloat(p.manualBet) || 0;
   const sb2  = round2(bal * (parseFloat(p.sliderPct) || 5) / 100);
   const actualBet = mb > 0 ? mb : sb2;
@@ -1654,16 +1685,25 @@ async function confirmBet(id) {
     pnl: null, afterBal: null, status: 'pending', note
   };
 
+  try {
+    await db_insertRecord(record);
+  } catch (err) {
+    console.error('confirmBet insert failed:', err);
+    showToast('❌ 下注紀錄沒有寫入：' + err.message, 'error');
+    renderRecordsTable(getFilteredRecords());
+    renderOverviewCards();
+    return;
+  }
+
   saveUndo({ type: 'confirmBet', projId: id, prevBalance: bal, recordId: record.id });
 
   // 僅清除手動下注欄（不寫餘額）
   p.manualBet = 0; p.manualPct = 0;
   await db_upsertProject(p);
-  await db_insertRecord(record);
 
-  document.getElementById(`pi-${id}-note`).value     = '';
-  document.getElementById(`pi-${id}-bet-date`).value = getTodayStr(); // 送出後重設回今日
-  const oddsEl2 = document.getElementById(`pi-${id}-odds`); if (oddsEl2) oddsEl2.value = DEFAULT_ODDS;
+  if (noteEl) noteEl.value = '';
+  if (dateEl) dateEl.value = getTodayStr(); // 送出後重設回今日
+  if (oddsEl) oddsEl.value = DEFAULT_ODDS;
   const mb2 = document.getElementById(`pi-${id}-manual-bet`); if (mb2) mb2.value = '';
   const mp2 = document.getElementById(`pi-${id}-manual-pct`); if (mp2) mp2.value = '';
   updateSuggestBet(id); renderProjectMgmtList();
@@ -1688,7 +1728,7 @@ async function settleRecord(recordId, type) {
   const prevRecord = { initBal: rec.initBal, pnl: rec.pnl, afterBal: rec.afterBal, status: rec.status };
 
   if (type === 'win') {
-    const recOdds      = rec.odds ?? DEFAULT_ODDS;
+    const recOdds      = parseOddsValue(rec.odds ?? getOddsForNote(rec.note));
     const defaultProfit = round2(rec.bet * recOdds);
     const input = prompt(
       `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}　賠率：${recOdds}x\n\n請輸入本次【獲利金額】\n（Enter = 下注額 × 賠率 = ${formatNum(defaultProfit)}）：`,
@@ -1763,22 +1803,21 @@ function recordBalanceSortValue(record) {
 }
 
 function sortRecordsForLedger(records) {
-  // 排序規則：① 日期 DESC → ② 同日 pending 置頂 → ③ 同日同狀態按備註 ASC → ④ 建立時間 ASC
+  // 排序規則：① 日期 DESC → ② 同日依項目順序 → ③ 同日同項目依建立時間 ASC
   return [...records].sort((a, b) => {
     // ① 日期由新到舊
     const dateDiff = recordDateSortValue(b) - recordDateSortValue(a);
     if (dateDiff !== 0) return dateDiff;
 
-    // ② 同一天：未結算（pending）強制置頂
-    const aP = a.status === 'pending' ? 0 : 1;
-    const bP = b.status === 'pending' ? 0 : 1;
-    if (aP !== bP) return aP - bP;
+    // ② 同一天：先依項目管理中的順序分組
+    const projectOrder = record => {
+      const idx = cache.projects.findIndex(p => p.id === record.projectId || p.label === record.project);
+      return idx >= 0 ? idx : Number.MAX_SAFE_INTEGER;
+    };
+    const projectDiff = projectOrder(a) - projectOrder(b);
+    if (projectDiff !== 0) return projectDiff;
 
-    // ③ 同一天且狀態相同：備註升序分群（相同彩種排在一起）
-    const noteCmp = (a.note || '').localeCompare(b.note || '', 'zh-TW');
-    if (noteCmp !== 0) return noteCmp;
-
-    // ④ 最後：建立時間升序
+    // ③ 同日同項目：照下注建立順序，讓餘額鏈從上一筆接到下一筆
     return recordCreatedSortValue(a) - recordCreatedSortValue(b);
   });
 }
