@@ -1815,6 +1815,13 @@ tr.stripe td{background:#f8fafc}
 .pk-cell.draft .pk-miss{color:#92400e!important}
 .pk-draft-panel-inner{background:#fffbeb;border:1.5px dashed #fcd34d;
   border-radius:.5rem;padding:.35rem .45rem;margin:.3rem 0}
+/* Cold-filter recommendation panel (v11) */
+.cold-rec-panel{background:linear-gradient(135deg,#f0f9ff,#e0f2fe);
+  border:1.5px solid #7dd3fc;border-radius:.65rem;padding:.45rem .55rem;margin-bottom:.38rem}
+.cold-rec-balls{display:flex;gap:.3rem;justify-content:center;flex-wrap:wrap;
+  margin:.22rem 0 .1rem}
+.cold-rec-reason{font-size:.56rem;color:#1e3a5f;line-height:1.55;
+  border-top:1px solid #bae6fd;margin-top:.22rem;padding-top:.18rem}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -2738,6 +2745,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
                 '</div>'
             )
         return (
+            # ── Cold-filter recommendation panel (v11)
+            '<div id="pk-cold-rec-' + key + '"></div>'
             # ── Miss distribution histogram (collapsible)
             '<details style="margin-bottom:.4rem">'
             '<summary style="color:#6366f1;font-size:.68rem;font-weight:600;cursor:pointer;list-style:none;display:flex;align-items:center;gap:.22rem;padding:.22rem .3rem;border-radius:.3rem;transition:background .12s" onmouseover="this.style.background=\'#eff6ff\'" onmouseout="this.style.background=\'\'">'
@@ -3243,6 +3252,7 @@ function switchTab(key){
   _renderMissDist(key);
   renderBetLog(key);
   _restoreLock(key);
+  renderColdFilterPanel(key);
 }
 function setMissWin(key,win){
   var col=document.getElementById('miss-col-'+key);
@@ -3404,6 +3414,7 @@ function updateSelectionBoard(key){
   _renderMissDist(key);          // 遺漏分佈直方圖
   renderBetLog(key);             // 投注紀錄命中對比
   renderOEColorGuide(key);       // 今日配比推薦（v10.2）
+  renderColdFilterPanel(key);    // 冷門過濾智能推薦（v11）
 }
 
 /* ── updateTailOmissions: （panel_inner_html 已包含，此為獨立觸發入口）── */
@@ -3651,6 +3662,119 @@ function renderDraftPanel(key){
     +'</table>'
     +'</div>';
 }
+
+/* ── 冷門過濾推薦演算法（v11）── */
+function computeColdFilterRec(key){
+  var pd=(window._PERIOD_DATA&&window._PERIOD_DATA[key])||[];
+  var rd=(window._RECENT_DATA&&window._RECENT_DATA[key])||[];
+  var nhd=(window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{};
+  var hpd=(window._HEAT_PROB_DATA&&window._HEAT_PROB_DATA[key])||{};
+  if(!pd.length||!rd.length)return null;
+  var latest=rd[0];
+  if(!latest||!latest.numbers||!latest.numbers.length)return null;
+  var latestNums=latest.numbers;
+  // Build exclusion sets
+  var lastSet={};
+  latestNums.forEach(function(n){lastSet[n]=true;});
+  var neighborSet={};
+  latestNums.forEach(function(n){
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<39&&!lastSet[n+1])neighborSet[n+1]=true;
+  });
+  var hotSet={};
+  Object.keys(nhd).forEach(function(k){
+    var nd=nhd[k];
+    if(nd&&(nd.recent_freq||0)>=4)hotSet[parseInt(k)]=true;
+  });
+  function heatScore(n){
+    var hp=hpd[String(n)];
+    if(hp&&hp.next_hit_rate!==undefined&&hp.next_hit_rate!==null)return hp.next_hit_rate;
+    var nd=nhd[String(n)];
+    return nd?(nd.recent_freq||0):0;
+  }
+  function ns(n){return(n<10?'0':'')+n;}
+  var selected=[];
+  var usedNums={};
+  for(var pi=0;pi<pd.length&&selected.length<5;pi++){
+    var period=pd[pi];
+    var cands=(period.ref_numbers||[]).slice();
+    if(!cands.length)continue;
+    var blocked=[];var remaining=[];
+    cands.forEach(function(n){
+      var reason=null;
+      if(lastSet[n])reason='當期號';
+      else if(neighborSet[n])reason='鄰號';
+      else if(hotSet[n])reason='過熱';
+      else if(usedNums[n])reason='已選';
+      if(reason)blocked.push({n:n,reason:reason});
+      else remaining.push(n);
+    });
+    if(!remaining.length)continue;
+    remaining.sort(function(a,b){return heatScore(a)-heatScore(b);});
+    var chosen=remaining[0];
+    usedNums[chosen]=true;
+    var heat=heatScore(chosen);
+    var heatStr=typeof heat==='number'?'熱力'+Math.round(heat*10)/10+'%':'熱力最低';
+    var blockedStr=blocked.length
+      ?blocked.map(function(b){return ns(b.n)+'（'+b.reason+'）';}).join('、')
+      :'（無剔除）';
+    var remStr=remaining.map(ns).join('、');
+    selected.push({
+      num:chosen,pi:pi,t:period.t,date:period.ref_date,
+      blocked:blocked,remaining:remaining,heat:heat,
+      reason:'冷門第'+(pi+1)+'期 t'+period.t+'（'+period.ref_date+'）'
+        +'，剔除：'+blockedStr
+        +'，餘：'+remStr
+        +'，'+heatStr+'最低 → 精選 '+ns(chosen)
+    });
+  }
+  return selected.length?selected:null;
+}
+
+function renderColdFilterPanel(key){
+  var el=document.getElementById('pk-cold-rec-'+key);
+  if(!el)return;
+  var rec=computeColdFilterRec(key);
+  if(!rec||!rec.length){el.innerHTML='';return;}
+  function ns(n){return(n<10?'0':'')+n;}
+  var balls=rec.map(function(r){
+    return '<span class="ball-sm '+_clsBall(r.num)+'" '
+      +'style="width:1.65rem;height:1.65rem;font-size:.62rem;cursor:default">'+ns(r.num)+'</span>';
+  }).join('');
+  var reasons=rec.map(function(r,i){
+    return '<div style="padding:.1rem 0;border-bottom:1px solid rgba(125,211,252,.35)">'
+      +'<span style="font-weight:800;color:#0369a1">No.'+(i+1)+' </span>'
+      +'<span class="ball-sm '+_clsBall(r.num)+'" style="width:.9rem;height:.9rem;'
+      +'font-size:.42rem;vertical-align:middle">'+ns(r.num)+'</span> '
+      +r.reason+'</div>';
+  }).join('');
+  var nums=rec.map(function(r){return r.num;});
+  el.innerHTML='<div class="cold-rec-panel">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
+    +'<span style="font-size:.62rem;font-weight:800;color:#0c4a6e">🧊 冷門過濾智能推薦</span>'
+    +'<button onclick="applyRecToSel(\''+key+'\',['+nums.join(',')+'])" '
+    +'style="font-size:.57rem;padding:.1rem .3rem;border:none;border-radius:.28rem;'
+    +'background:#0369a1;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">'
+    +'一鍵帶入選號盤</button>'
+    +'</div>'
+    +'<div class="cold-rec-balls">'+balls+'</div>'
+    +'<details style="margin-top:.06rem">'
+    +'<summary style="font-size:.57rem;color:#0369a1;cursor:pointer;list-style:none;'
+    +'font-weight:600;padding:.05rem 0">▶ 查看推理過程</summary>'
+    +'<div class="cold-rec-reason">'+reasons+'</div>'
+    +'</details>'
+    +'</div>';
+}
+
+function applyRecToSel(key,nums){
+  _pickerSel[key]=nums.slice(0,5);
+  _pickerDraft[key]=[];
+  _pickerStrategySource[key]='cold_filter';
+  _refreshPickerUI(key);
+  renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
+}
+
 function _refreshPickerUI(key){
   var sel=_pickerSel[key]||[];
   var draft=_pickerDraft[key]||[];
