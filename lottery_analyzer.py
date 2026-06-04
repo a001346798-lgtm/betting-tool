@@ -3673,7 +3673,8 @@ function computeColdFilterRec(key){
   var latest=rd[0];
   if(!latest||!latest.numbers||!latest.numbers.length)return null;
   var latestNums=latest.numbers;
-  // Build exclusion sets
+
+  // ── Exclusion sets (A/B/C) ──────────────────────────────────
   var lastSet={};
   latestNums.forEach(function(n){lastSet[n]=true;});
   var neighborSet={};
@@ -3686,46 +3687,97 @@ function computeColdFilterRec(key){
     var nd=nhd[k];
     if(nd&&(nd.recent_freq||0)>=4)hotSet[parseInt(k)]=true;
   });
-  function heatScore(n){
+
+  // ── Per-number helpers ──────────────────────────────────────
+  function getHP(n){
+    // Returns {has:bool, rate:number|null}
     var hp=hpd[String(n)];
-    if(hp&&hp.next_hit_rate!==undefined&&hp.next_hit_rate!==null)return hp.next_hit_rate;
+    if(hp&&hp.next_hit_rate!==undefined&&hp.next_hit_rate!==null)
+      return {has:true,rate:hp.next_hit_rate};
+    return {has:false,rate:null};
+  }
+  function heatScore(n){
+    var h=getHP(n);
+    if(h.has)return h.rate;
     var nd=nhd[String(n)];
     return nd?(nd.recent_freq||0):0;
   }
+  function dangerPct(n){
+    var nd=nhd[String(n)];
+    return nd?(nd.danger_pct||0):0;
+  }
+  function curMiss(n){
+    var nd=nhd[String(n)];
+    return nd?(nd.current_miss||0):0;
+  }
   function ns(n){return(n<10?'0':'')+n;}
+
   var selected=[];
   var usedNums={};
+
   for(var pi=0;pi<pd.length&&selected.length<5;pi++){
     var period=pd[pi];
     var cands=(period.ref_numbers||[]).slice();
     if(!cands.length)continue;
-    var blocked=[];var remaining=[];
+
+    var blocked=[];
+    var remaining=[];
     cands.forEach(function(n){
       var reason=null;
-      if(lastSet[n])reason='當期號';
-      else if(neighborSet[n])reason='鄰號';
-      else if(hotSet[n])reason='過熱';
-      else if(usedNums[n])reason='已選';
+      var hp=getHP(n);
+      var cm=curMiss(n);
+      if(lastSet[n])                   reason='當期號(A)';
+      else if(neighborSet[n])          reason='鄰號(B)';
+      else if(hotSet[n])               reason='過熱(C)';
+      else if(cm>15)                   reason='超冷死棋(D，遺漏'+cm+'期)';
+      else if(hp.has&&hp.rate===0)     reason='熱力0%(E)';
+      else if(usedNums[n])             reason='已選';
       if(reason)blocked.push({n:n,reason:reason});
       else remaining.push(n);
     });
     if(!remaining.length)continue;
-    remaining.sort(function(a,b){return heatScore(a)-heatScore(b);});
+
+    // ── Sort: primary = heatScore ASC；tiebreak = dangerPct ASC ──
+    remaining.sort(function(a,b){
+      var ha=heatScore(a),hb=heatScore(b);
+      if(ha!==hb)return ha-hb;
+      return dangerPct(a)-dangerPct(b);
+    });
     var chosen=remaining[0];
     usedNums[chosen]=true;
+
     var heat=heatScore(chosen);
-    var heatStr=typeof heat==='number'?'熱力'+Math.round(heat*10)/10+'%':'熱力最低';
+    var dp=dangerPct(chosen);
+    var heatStr='熱力'+Math.round(heat*10)/10+'%';
     var blockedStr=blocked.length
       ?blocked.map(function(b){return ns(b.n)+'（'+b.reason+'）';}).join('、')
       :'（無剔除）';
-    var remStr=remaining.map(ns).join('、');
+    var remStr=remaining.map(function(n){
+      return ns(n)+'[熱'+Math.round(heatScore(n)*10)/10+'%·危'+dangerPct(n)+'%]';
+    }).join('、');
+
+    // ── Tiebreak detection ──────────────────────────────────────
+    var tiebreakText='';
+    var tiedNums=remaining.filter(function(n){return heatScore(n)===heat;});
+    if(tiedNums.length>1){
+      var tbList=tiedNums.map(function(n){
+        return ns(n)+'（熱力'+Math.round(heatScore(n)*10)/10+'%·危險度'+dangerPct(n)+'%）';
+      }).join(' vs ');
+      tiebreakText='，熱力同為'+heatStr+'，比對危險度：'+tbList
+        +'，'+ns(chosen)+'危'+dp+'% 最低';
+    }
+
+    var fullReason='冷門第'+(pi+1)+'期 t'+period.t+'（'+period.ref_date+'）'
+      +'，剔除：'+blockedStr
+      +'，餘：'+remStr
+      +(tiebreakText||'，'+heatStr+'最低')
+      +' → 精選 '+ns(chosen);
+
     selected.push({
       num:chosen,pi:pi,t:period.t,date:period.ref_date,
-      blocked:blocked,remaining:remaining,heat:heat,
-      reason:'冷門第'+(pi+1)+'期 t'+period.t+'（'+period.ref_date+'）'
-        +'，剔除：'+blockedStr
-        +'，餘：'+remStr
-        +'，'+heatStr+'最低 → 精選 '+ns(chosen)
+      blocked:blocked,remaining:remaining,
+      heat:heat,dp:dp,tiebreak:(tiedNums.length>1),
+      reason:fullReason
     });
   }
   return selected.length?selected:null;
