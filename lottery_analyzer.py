@@ -5204,6 +5204,33 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
     analyzer = LotteryAnalyzer(data_dir)
     writer   = DataWriter(data_dir)
     syncer   = AutoSyncManager(data_dir, writer)
+    build_id = os.environ.get("RENDER_GIT_COMMIT", "")
+    if not build_id:
+        try:
+            src = Path(__file__).resolve()
+            stat = src.stat()
+            build_id = f"{src.name}:{stat.st_size}:{stat.st_mtime_ns}"
+        except Exception:
+            build_id = datetime.now().isoformat(timespec="seconds")
+    version_path = Path(str(output_path) + ".version")
+
+    def _mark_report_current() -> None:
+        try:
+            version_path.write_text(build_id, encoding="utf-8")
+        except Exception as e:
+            print(f"[WARN] write report version failed: {e}")
+
+    def _report_needs_rebuild() -> bool:
+        if not output_path.exists():
+            return True
+        try:
+            return version_path.read_text(encoding="utf-8").strip() != build_id
+        except Exception:
+            return True
+
+    def _rebuild_report() -> None:
+        analyzer.run(output_path, server_mode=True)
+        _mark_report_current()
 
     if run_init:
         # ── Auto-sync on startup ──────────────────────────────────
@@ -5216,7 +5243,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
             print("[AUTO-SYNC] 所有彩票資料已是最新")
 
         print("\n[INIT] 建立初始報告...")
-        analyzer.run(output_path, server_mode=True)
+        _rebuild_report()
 
     betlog_dir = data_dir.resolve() / "betlog_exports"
 
@@ -5288,16 +5315,17 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
 
     @app.route("/")
     def index():
-        # 若報告檔不存在（雲端冷啟動），只做分析，不自動爬蟲
-        if not output_path.exists():
+        # 若報告檔不存在，或 Render 換了新版 commit 但 /tmp 舊報告仍存在，就重建。
+        if _report_needs_rebuild():
             try:
-                analyzer.run(output_path, server_mode=True)
+                _rebuild_report()
             except Exception as e:
                 print(f"[ERROR] init failed: {e}")
         response = send_file(str(output_path.resolve()))
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        response.headers["X-App-Build"] = build_id[:16]
         return response
 
     @app.route("/api/betlog/load", methods=["GET"])
@@ -5375,7 +5403,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                     "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）{sync_meta}",
                 })
             try:
-                analyzer.run(output_path, server_mode=True)
+                _rebuild_report()
                 rebuilt = True
             except Exception as e:
                 print(f"[ERROR] analyzer.run after sync: {e}")
@@ -5403,7 +5431,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         cfg = LOTTERY_CONFIG[key]
         ok  = writer.append(key, cfg, date_s, [int(n) for n in numbers])
         if ok:
-            analyzer.run(output_path, server_mode=True)
+            _rebuild_report()
             return jsonify({"success": True, "message": "已儲存並更新報告"})
         return jsonify({"success": False, "message": "儲存失敗（日期可能重複）"})
 
