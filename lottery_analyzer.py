@@ -3729,7 +3729,7 @@ function computeColdFilterRec(key){
       if(lastSet[n])                   reason='當期號(A)';
       else if(neighborSet[n])          reason='鄰號(B)';
       else if(hotSet[n])               reason='過熱(C)';
-      else if(cm>15)                   reason='超冷死棋(D，遺漏'+cm+'期)';
+      else if(cm>20)                   reason='超冷死棋(D，遺漏'+cm+'期)';
       else if(hp.has&&hp.rate===0)     reason='熱力0%(E)';
       else if(usedNums[n])             reason='已選';
       if(reason)blocked.push({n:n,reason:reason});
