@@ -249,7 +249,11 @@ create policy "anon_all" on app_settings
       <h3 class="text-sm font-semibold text-slate-300 mb-3">🏷️ 常用備註標籤管理</h3>
       <div class="flex gap-2 mb-3">
         <input type="text" id="new-tag-input" placeholder="輸入新標籤文字…" maxlength="20"
-          class="flex-1 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-slate-400"
+          class="flex-1 min-w-[160px] bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-slate-400"
+          onkeydown="if(event.key==='Enter') addNoteTag()" />
+        <input type="number" id="new-tag-odds" value="1.0" min="1.0" max="3.0" step="0.1" inputmode="decimal"
+          title="這個備註的預設賠率"
+          class="w-24 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-slate-400"
           onkeydown="if(event.key==='Enter') addNoteTag()" />
         <button onclick="addNoteTag()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap">＋ 新增</button>
       </div>
@@ -447,12 +451,14 @@ function getColor(idx) { return PALETTE[Math.abs(idx) % PALETTE.length]; }
 
 const DEFAULT_TAGS = ['早場', '晚場', '正常', '加碼', '試水溫', '照舊'];
 
-// 備註關鍵字 → 賠率對照表（可自行增減，key 為包含即匹配的關鍵字）
-const NOTE_ODDS_MAP = {
+// 備註關鍵字 → 賠率對照表（可透過常用備註管理增減）
+const DEFAULT_NOTE_ODDS_MAP = {
   '加州五中一': 1.3,
+  '紐約五中一': 1.3,
   '539五不中':  1.0,
   '紐約晚盤':   1.0,
 };
+const NOTE_ODDS_MAP = { ...DEFAULT_NOTE_ODDS_MAP };
 const DEFAULT_ODDS = 1.0;
 let dbSupportsOddsColumn = true;
 
@@ -472,10 +478,39 @@ function isMissingOddsColumnError(error) {
   return /odds/i.test(text) && /(column|schema cache|not find|does not exist|PGRST204)/i.test(text);
 }
 
+function normalizeNoteOddsMap(map = {}) {
+  const normalized = { ...DEFAULT_NOTE_ODDS_MAP };
+  Object.entries(map || {}).forEach(([key, odds]) => {
+    const label = String(key || '').trim();
+    if (label) normalized[label] = parseOddsValue(odds);
+  });
+  return normalized;
+}
+
+function applyNoteOddsMap(map = {}) {
+  const normalized = normalizeNoteOddsMap(map);
+  if (typeof cache !== 'undefined') cache.noteOdds = normalized;
+  Object.keys(NOTE_ODDS_MAP).forEach(key => delete NOTE_ODDS_MAP[key]);
+  Object.assign(NOTE_ODDS_MAP, normalized);
+  return normalized;
+}
+
+function getExactNoteOdds(note) {
+  const key = String(note || '').trim();
+  return parseOddsValue(NOTE_ODDS_MAP[key] ?? DEFAULT_ODDS);
+}
+
+function setProjectOdds(projId, odds) {
+  const oddsEl = document.getElementById(`pi-${projId}-odds`);
+  if (oddsEl) oddsEl.value = parseOddsValue(odds);
+}
+
 // 依備註文字查詢對應賠率（模糊包含匹配，未命中則回傳預設值）
 function getOddsForNote(note) {
   const text = (note || '').trim();
-  for (const [keyword, odds] of Object.entries(NOTE_ODDS_MAP)) {
+  const entries = Object.entries(NOTE_ODDS_MAP)
+    .sort((a, b) => b[0].length - a[0].length);
+  for (const [keyword, odds] of entries) {
     if (text.includes(keyword)) return odds;
   }
   return DEFAULT_ODDS;
@@ -494,6 +529,7 @@ const SK_LIST    = 'proj_list_v2';
 const SK_DATA    = id => `proj_data_${id}`;
 const SK_RECORDS = 'betting_records';
 const SK_TAGS    = 'note_tags';
+const SK_NOTE_ODDS = 'note_odds_map';
 // Supabase config keys（存於 localStorage）
 const SK_SB_URL  = 'sb_url';
 const SK_SB_KEY  = 'sb_anon_key';
@@ -629,7 +665,8 @@ function disconnectDb() {
 const cache = {
   projects: [], // 合併 list + data：{ id, label, colorIdx, sortOrder, initialCapital, currentBalance, sliderPct, manualBet, manualPct }
   records:  [], // 與原始格式相同
-  tags:     []
+  tags:     [],
+  noteOdds: { ...DEFAULT_NOTE_ODDS_MAP }
 };
 
 // ============================================================
@@ -640,17 +677,19 @@ async function fetchAll() {
   showLoading(true, '正在從雲端讀取資料…');
   try {
     if (isCloud()) {
-      const [pRes, rRes, sRes] = await Promise.all([
+      const [pRes, rRes, sRes, oRes] = await Promise.all([
         sb.from('projects').select('*').order('sort_order', { ascending: true }),
         sb.from('betting_records').select('*').order('id', { ascending: false }),
-        sb.from('app_settings').select('value').eq('key', 'note_tags').maybeSingle()
+        sb.from('app_settings').select('value').eq('key', 'note_tags').maybeSingle(),
+        sb.from('app_settings').select('value').eq('key', 'note_odds_map').maybeSingle()
       ]);
       if (pRes.error) throw pRes.error;
       if (rRes.error) throw rRes.error;
 
+      cache.tags     = sRes.data?.value || [...DEFAULT_TAGS];
+      applyNoteOddsMap(oRes.data?.value || {});
       cache.projects = (pRes.data || []).map(dbToProject);
       cache.records  = (rRes.data || []).map(dbToRecord);
-      cache.tags     = sRes.data?.value || [...DEFAULT_TAGS];
       updateSyncTime(); // Opt 7：初次載入後記錄同步時間
     } else {
       loadCacheFromLocalStorage();
@@ -671,13 +710,17 @@ async function syncFromCloud() {
   if (!isCloud() || _syncLock) return;
   _syncLock = true;
   try {
-    const [pRes, rRes] = await Promise.all([
+    const [pRes, rRes, sRes, oRes] = await Promise.all([
       sb.from('projects').select('*').order('sort_order', { ascending: true }),
-      sb.from('betting_records').select('*').order('id', { ascending: false })
+      sb.from('betting_records').select('*').order('id', { ascending: false }),
+      sb.from('app_settings').select('value').eq('key', 'note_tags').maybeSingle(),
+      sb.from('app_settings').select('value').eq('key', 'note_odds_map').maybeSingle()
     ]);
     if (pRes.error || rRes.error) return; // 靜默失敗，不打擾使用者
 
     // 以雲端資料完全覆蓋 cache（包含 status、pnl、balance 等最新狀態）
+    cache.tags = sRes.data?.value || cache.tags;
+    applyNoteOddsMap(oRes.data?.value || cache.noteOdds);
     cache.projects = (pRes.data || []).map(dbToProject);
     cache.records  = (rRes.data || []).map(dbToRecord);
 
@@ -695,6 +738,8 @@ async function syncFromCloud() {
     // 重渲染所有受影響的 UI 區塊（不重建整個 DOM，避免閃爍）
     renderOverviewCards();
     renderProjectMgmtList();
+    renderTagsManageList();
+    refreshAllProjectTags();
     renderRecordsTable(getFilteredRecords());
     renderStatsPanel();
     // 更新所有項目頁面的餘額顯示
@@ -858,6 +903,16 @@ async function db_saveTags(tags) {
   }
 }
 
+async function db_saveNoteOdds(map) {
+  const normalized = applyNoteOddsMap(map);
+  if (isCloud()) {
+    const { error } = await sb.from('app_settings').upsert({ key: 'note_odds_map', value: normalized });
+    if (error) showToast('⚠️ 賠率設定儲存失敗：' + error.message, 'error');
+  } else {
+    localStorage.setItem(SK_NOTE_ODDS, JSON.stringify(normalized));
+  }
+}
+
 // ============================================================
 // LocalStorage fallback（非 Supabase 模式）
 // ============================================================
@@ -880,10 +935,13 @@ function loadCacheFromLocalStorage() {
     writeCacheToLocalStorage();
   }
   const recRaw   = localStorage.getItem(SK_RECORDS);
+  const oddsRaw  = localStorage.getItem(SK_NOTE_ODDS);
+  applyNoteOddsMap(oddsRaw ? JSON.parse(oddsRaw) : {});
   cache.records  = recRaw ? JSON.parse(recRaw).map(normalizeRecordBalanceFields) : [];
   const tagRaw   = localStorage.getItem(SK_TAGS);
   cache.tags     = tagRaw ? JSON.parse(tagRaw) : [...DEFAULT_TAGS];
   if (!tagRaw) localStorage.setItem(SK_TAGS, JSON.stringify(DEFAULT_TAGS));
+  if (!oddsRaw) localStorage.setItem(SK_NOTE_ODDS, JSON.stringify(cache.noteOdds));
 }
 
 function writeCacheToLocalStorage() {
@@ -897,6 +955,7 @@ function writeCacheToLocalStorage() {
   });
   localStorage.setItem(SK_RECORDS, JSON.stringify(cache.records));
   localStorage.setItem(SK_TAGS,    JSON.stringify(cache.tags));
+  localStorage.setItem(SK_NOTE_ODDS, JSON.stringify(cache.noteOdds));
 }
 
 // ============================================================
@@ -1123,19 +1182,19 @@ function renderOverviewCards() {
     const c   = getColor(p.colorIdx);
     const bal = parseFloat(p.currentBalance) || 0;
 
-    // ── 核心邏輯：優先讀今日 pending 紀錄的實際下注額 ──
-    const todayPending = cache.records.find(
+    // ── 核心邏輯：加總今日所有 pending 紀錄的實際下注額 ──
+    const todayPendingRecords = cache.records.filter(
       r => r.projectId === p.id && r.status === 'pending' && r.date === today
     );
 
-    // 今日有 pending 紀錄 → 顯示實際下注額；否則嚴格歸零，禁止任何比例估算
-    const bet       = todayPending ? todayPending.bet : 0;
-    const isPending = !!todayPending;
+    // 今日有 pending 紀錄 → 顯示實際下注總額；否則嚴格歸零，禁止任何比例估算
+    const bet       = todayPendingRecords.reduce((sum, r) => sum + (parseFloat(r.bet) || 0), 0);
+    const isPending = todayPendingRecords.length > 0;
 
     total += bet;
 
     const subLine = isPending
-      ? `<div class="text-xs text-amber-400 mt-1 font-semibold">⏳ 今日待結算</div>`
+      ? `<div class="text-xs text-amber-400 mt-1 font-semibold">⏳ ${todayPendingRecords.length} 筆待結算</div>`
       : `<div class="text-xs text-slate-500 mt-0.5">餘額 ${formatNum(bal)}</div>`;
 
     return `<div class="rounded-lg p-3 text-center transition-all ${isPending
@@ -2106,29 +2165,52 @@ function resetFilter() {
 // ============================================================
 // 常用備註標籤
 // ============================================================
+function jsArg(value) {
+  return JSON.stringify(String(value ?? '')).replace(/</g, '\\u003c');
+}
+
 async function addNoteTag() {
   const input = document.getElementById('new-tag-input');
+  const oddsInput = document.getElementById('new-tag-odds');
   const text  = input.value.trim();
   if (!text) return;
+  const odds = parseOddsValue(oddsInput?.value || DEFAULT_ODDS);
   const tags = cache.tags;
-  if (tags.includes(text)) { showToast(`「${text}」已存在`, 'error'); return; }
-  tags.push(text);
+  const existed = tags.includes(text);
+  if (!existed) tags.push(text);
+  cache.noteOdds[text] = odds;
   await db_saveTags(tags);
+  await db_saveNoteOdds(cache.noteOdds);
   input.value = '';
+  if (oddsInput) oddsInput.value = DEFAULT_ODDS;
   renderTagsManageList(); refreshAllProjectTags();
+  showToast(existed ? `已更新「${text}」賠率 ${odds}x` : `已新增「${text}」賠率 ${odds}x`, 'ok');
 }
 async function deleteNoteTag(idx) {
   const tags = cache.tags;
+  const tag = tags[idx];
   tags.splice(idx, 1);
+  if (tag) delete cache.noteOdds[tag];
   await db_saveTags(tags);
+  await db_saveNoteOdds(cache.noteOdds);
   renderTagsManageList(); refreshAllProjectTags();
+}
+async function updateNoteTagOdds(idx, value) {
+  const tag = cache.tags[idx];
+  if (!tag) return;
+  const odds = parseOddsValue(value);
+  cache.noteOdds[tag] = odds;
+  await db_saveNoteOdds(cache.noteOdds);
+  renderTagsManageList();
+  refreshAllProjectTags();
+  showToast(`已更新「${tag}」賠率 ${odds}x`, 'ok');
 }
 function clickNoteTag(projId, text) {
   const input = document.getElementById(`pi-${projId}-note`);
   if (!input) return;
   const cur = input.value.trim();
   input.value = cur ? cur + '、' + text : text;
-  autoFillOdds(projId); // 點擊標籤後自動比對並帶入賠率
+  setProjectOdds(projId, getExactNoteOdds(text)); // 點擊標籤後直接帶入該標籤賠率
   input.focus();
 }
 function renderTagsManageList() {
@@ -2136,8 +2218,14 @@ function renderTagsManageList() {
   const tags = cache.tags;
   if (tags.length === 0) { container.innerHTML = '<span class="text-xs text-slate-500">尚無標籤</span>'; return; }
   container.innerHTML = tags.map((tag, i) => `
-    <span class="inline-flex items-center gap-1 bg-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded-full">
-      ${escHtml(tag)}
+    <span class="inline-flex items-center gap-1.5 bg-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded-full">
+      <span>${escHtml(tag)}</span>
+      <input type="number" min="1.0" max="3.0" step="0.1" inputmode="decimal"
+        value="${getExactNoteOdds(tag)}"
+        title="${escHtml(tag)} 的預設賠率"
+        onchange="updateNoteTagOdds(${i}, this.value)"
+        class="w-14 bg-slate-800 text-sky-200 px-1.5 py-0.5 rounded border border-slate-600 outline-none focus:border-sky-500 text-xs" />
+      <span class="text-slate-500">x</span>
       <button onclick="deleteNoteTag(${i})" class="text-slate-400 hover:text-rose-400 text-sm font-bold leading-none ml-0.5">×</button>
     </span>`).join('');
 }
@@ -2146,9 +2234,9 @@ function renderProjectPageTags(projId) {
   const tags = cache.tags;
   if (tags.length === 0) { container.innerHTML = '<span class="text-xs text-slate-600">尚無標籤</span>'; return; }
   container.innerHTML = tags.map(tag => `
-    <button onclick="clickNoteTag('${projId}', '${escHtml(tag).replace(/'/g,"&#39;")}')"
+    <button onclick='clickNoteTag(${jsArg(projId)}, ${jsArg(tag)})'
       class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded-full border border-slate-600 transition-colors">
-      ${escHtml(tag)}
+      ${escHtml(tag)} <span class="text-sky-300">${getExactNoteOdds(tag)}x</span>
     </button>`).join('');
 }
 function refreshAllProjectTags() {
@@ -2167,7 +2255,7 @@ function exportJSON() {
   const list = cache.projects.map(p => ({ id: p.id, label: p.label, colorIdx: p.colorIdx }));
   downloadFile(
     JSON.stringify({ exportDate: new Date().toISOString(), version:2,
-      projectList: list, projectData, records: cache.records, noteTags: cache.tags }, null, 2),
+      projectList: list, projectData, records: cache.records, noteTags: cache.tags, noteOdds: cache.noteOdds }, null, 2),
     `betting_backup_${getTodayStr()}.json`, 'application/json');
 }
 
@@ -2215,6 +2303,7 @@ async function importData(event) {
         });
         cache.records = (data.records || []).map(normalizeRecordBalanceFields);
         cache.tags    = data.noteTags || [...DEFAULT_TAGS];
+        applyNoteOddsMap(data.noteOdds || {});
       } else if (data.projects) {
         cache.projects = []; let i = 0;
         for (const key of ['A','B','C']) {
@@ -2226,6 +2315,7 @@ async function importData(event) {
         }
         cache.records = (data.records || []).map(normalizeRecordBalanceFields);
         cache.tags    = [...DEFAULT_TAGS];
+        applyNoteOddsMap({});
       } else { throw new Error('無法識別格式'); }
 
       if (isCloud()) {
@@ -2236,6 +2326,7 @@ async function importData(event) {
           if (error) console.warn('record upsert:', error);
         }
         await db_saveTags(cache.tags);
+        await db_saveNoteOdds(cache.noteOdds);
       } else {
         writeCacheToLocalStorage();
       }
