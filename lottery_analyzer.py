@@ -323,14 +323,23 @@ class PeriodRepetitionAnalyzer:
             })
         recent_match.reverse()
 
+        draw_history_150: List[Dict] = []
+        for i in range(max(0, n - 150), n):
+            draw_history_150.append({
+                "date":    dates[i],
+                "numbers": sorted(list(draws[i])),
+            })
+        draw_history_150.reverse()  # newest first
+
         return {
-            "t_stats":        t_stats,
-            "top8_lowest":    top8,
-            "latest_date":    dates[latest_idx],
-            "latest_numbers": sorted(list(draws[latest_idx])),
-            "total_draws":    n,
-            "recent_8":       recent_8,
-            "recent_match":   recent_match,
+            "t_stats":          t_stats,
+            "top8_lowest":      top8,
+            "latest_date":      dates[latest_idx],
+            "latest_numbers":   sorted(list(draws[latest_idx])),
+            "total_draws":      n,
+            "recent_8":         recent_8,
+            "recent_match":     recent_match,
+            "draw_history_150": draw_history_150,
         }
 
 
@@ -1822,6 +1831,16 @@ tr.stripe td{background:#f8fafc}
   margin:.22rem 0 .1rem}
 .cold-rec-reason{font-size:.56rem;color:#1e3a5f;line-height:1.55;
   border-top:1px solid #bae6fd;margin-top:.22rem;padding-top:.18rem}
+/* Cold-filter historical backtest (v12) */
+.cold-bt-section{border-top:1px solid #bae6fd;margin-top:.32rem;padding-top:.28rem}
+.cold-bt-tabs{display:flex;gap:.18rem;margin-bottom:.2rem;align-items:center}
+.cold-bt-tab{font-size:.55rem;padding:.1rem .28rem;border:1px solid #7dd3fc;border-radius:.28rem;
+  background:#fff;color:#0369a1;cursor:pointer;font-weight:600;line-height:1.5;
+  transition:background .1s,color .1s}
+.cold-bt-tab.active{background:#0369a1;color:#fff;border-color:#0369a1}
+.cold-bt-result{font-size:.58rem;line-height:1.6}
+.cold-bt-win-bar{font-weight:800;margin-bottom:.1rem}
+.cold-bt-hits{color:#475569;margin-top:.06rem}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -2116,6 +2135,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             gaps_in=gaps,
             gap_affects_recent=gap_affects_recent,
             rev_oe_in=rev_oe,
+            draw_hist_in=data["period_result"].get("draw_history_150", []),
         )
         return inner + data_script
 
@@ -2688,23 +2708,25 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
                                    rhp: Optional[Dict] = None,
                                    gaps_in: Optional[List] = None,
                                    gap_affects_recent: bool = False,
-                                   rev_oe_in: Optional[Dict] = None) -> str:
+                                   rev_oe_in: Optional[Dict] = None,
+                                   draw_hist_in: Optional[List] = None) -> str:
         """Embed JS globals for all analysis data."""
         current_misses = mr["current_misses"]
-        miss_json   = _json.dumps({str(k): v for k, v in current_misses.items()})
-        recent_json = _json.dumps(pr.get("recent_8", []))
-        draw_json   = _json.dumps(pr.get("recent_match", pr.get("recent_8", [])))
-        period_json = _json.dumps(pr.get("top8_lowest", []))
-        nhr_json    = _json.dumps({str(k): v for k, v in (nhr or {}).items()})
-        oec_json    = _json.dumps(oec or {})
+        miss_json      = _json.dumps({str(k): v for k, v in current_misses.items()})
+        recent_json    = _json.dumps(pr.get("recent_8", []))
+        draw_json      = _json.dumps(pr.get("recent_match", pr.get("recent_8", [])))
+        period_json    = _json.dumps(pr.get("top8_lowest", []))
+        nhr_json       = _json.dumps({str(k): v for k, v in (nhr or {}).items()})
+        oec_json       = _json.dumps(oec or {})
         # Serialize rhp.numbers with string keys for JS lookup
-        rhp_nums    = {str(k): v for k, v in (rhp or {}).get("numbers", {}).items()}
-        rhp_json    = _json.dumps(rhp_nums)
-        gap_json    = _json.dumps({
+        rhp_nums       = {str(k): v for k, v in (rhp or {}).get("numbers", {}).items()}
+        rhp_json       = _json.dumps(rhp_nums)
+        gap_json       = _json.dumps({
             "count": len(gaps_in or []),
             "affectsRecent": gap_affects_recent,
         })
-        rev_oe_json = _json.dumps(rev_oe_in or {})
+        rev_oe_json    = _json.dumps(rev_oe_in or {})
+        draw_hist_json = _json.dumps(draw_hist_in or [])
         return (
             '<script>'
             'window._MISS_DATA=window._MISS_DATA||{};'
@@ -2725,6 +2747,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             'window._GAP_DATA["' + key + '"]=' + gap_json + ';'
             'window._REV_OE_DATA=window._REV_OE_DATA||{};'
             'window._REV_OE_DATA["' + key + '"]=' + rev_oe_json + ';'
+            'window._DRAW_HISTORY=window._DRAW_HISTORY||{};'
+            'window._DRAW_HISTORY["' + key + '"]=' + draw_hist_json + ';'
             '</script>'
         )
 
@@ -3385,14 +3409,18 @@ function _btStore(key,d){
   window._MISS_DATA=window._MISS_DATA||{};
   window._RECENT_DATA=window._RECENT_DATA||{};
   window._DRAW_DATA=window._DRAW_DATA||{};
-  if(d.miss_data)       window._MISS_DATA[key]=d.miss_data;
-  if(d.recent_data)     window._RECENT_DATA[key]=d.recent_data;
-  if(d.draw_data)       window._DRAW_DATA[key]=d.draw_data;
-  if(d.period_data){    window._PERIOD_DATA=window._PERIOD_DATA||{};    window._PERIOD_DATA[key]=d.period_data; }
-  if(d.num_hist_data){  window._NUM_HIST_DATA=window._NUM_HIST_DATA||{};  window._NUM_HIST_DATA[key]=d.num_hist_data; }
-  if(d.oe_color_data){  window._OE_COLOR_DATA=window._OE_COLOR_DATA||{};  window._OE_COLOR_DATA[key]=d.oe_color_data; }
-  if(d.heat_prob_data){ window._HEAT_PROB_DATA=window._HEAT_PROB_DATA||{}; window._HEAT_PROB_DATA[key]=d.heat_prob_data; }
-  if(d.rev_oe_data){    window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
+  if(d.miss_data)         window._MISS_DATA[key]=d.miss_data;
+  if(d.recent_data)       window._RECENT_DATA[key]=d.recent_data;
+  if(d.draw_data)         window._DRAW_DATA[key]=d.draw_data;
+  if(d.period_data){      window._PERIOD_DATA=window._PERIOD_DATA||{};      window._PERIOD_DATA[key]=d.period_data; }
+  if(d.num_hist_data){    window._NUM_HIST_DATA=window._NUM_HIST_DATA||{};  window._NUM_HIST_DATA[key]=d.num_hist_data; }
+  if(d.oe_color_data){    window._OE_COLOR_DATA=window._OE_COLOR_DATA||{};  window._OE_COLOR_DATA[key]=d.oe_color_data; }
+  if(d.heat_prob_data){   window._HEAT_PROB_DATA=window._HEAT_PROB_DATA||{}; window._HEAT_PROB_DATA[key]=d.heat_prob_data; }
+  if(d.rev_oe_data){      window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
+  if(d.draw_history_data){window._DRAW_HISTORY=window._DRAW_HISTORY||{};    window._DRAW_HISTORY[key]=d.draw_history_data;
+    // Invalidate backtest cache for this key when draw history changes
+    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];});
+  }
 }
 
 /* ── updateSelectionBoard: 右側選號盤（側邊欄）完整同步 ── */
@@ -3663,6 +3691,163 @@ function renderDraftPanel(key){
     +'</div>';
 }
 
+/* ── 冷門過濾歷史回測（v12）── */
+var _coldBtCache={};
+var _coldBtPeriod={};
+
+function switchColdBt(key,periods){
+  _coldBtPeriod[key]=periods;
+  var wrap=document.getElementById('pk-cold-bt-'+key);
+  if(wrap){
+    wrap.querySelectorAll('.cold-bt-tab').forEach(function(t){
+      t.classList.toggle('active',parseInt(t.dataset.p)===periods);
+    });
+  }
+  renderColdFilterBacktest(key,periods);
+}
+
+function renderColdFilterBacktest(key,periods){
+  var el=document.getElementById('pk-cold-bt-result-'+key);
+  if(!el)return;
+  var cacheKey=key+'_'+periods;
+  var res=_coldBtCache[cacheKey];
+  if(!res){
+    res=runColdFilterBacktest(key,periods);
+    if(res)_coldBtCache[cacheKey]=res;
+  }
+  if(!res){
+    el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法回測</span>';
+    return;
+  }
+  var rate=res.total>0?Math.round(res.wins/res.total*1000)/10:0;
+  var rateC=rate>=60?'#16a34a':rate>=45?'#d97706':'#dc2626';
+  el.innerHTML='<div class="cold-bt-result">'
+    +'<div class="cold-bt-win-bar" style="color:'+rateC+'">'
+    +'勝率 <span style="font-size:.75rem">'+rate+'%</span>'
+    +' <span style="font-size:.56rem;color:#64748b;font-weight:400">'
+    +'（勝 '+res.wins+' 期 / 敗 '+(res.total-res.wins)+' 期，共 '+res.total+' 期）</span></div>'
+    +'<div class="cold-bt-hits">落點分析：'
+    +'<span style="color:#dc2626;font-weight:700">中1顆('+res.hits1+'次)</span> | '
+    +'<span style="color:#c2410c;font-weight:700">中2顆('+res.hits2+'次)</span> | '
+    +'<span style="color:#7c3aed;font-weight:700">中3顆+('+res.hits3p+'次)</span>'
+    +'</div></div>';
+}
+
+function runColdFilterBacktest(key,periods){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var wins=0,hits1=0,hits2=0,hits3p=0;
+  var total=Math.min(periods,dh.length-2);
+  for(var i=0;i<total;i++){
+    var actualNums=dh[i].numbers;
+    var histStart=i+1;
+    var simRec=_computeColdRecSim(dh,histStart);
+    if(!simRec||!simRec.length)continue;
+    var hitCount=0;
+    for(var ri=0;ri<simRec.length;ri++){
+      if(actualNums.indexOf(simRec[ri].num)!==-1)hitCount++;
+    }
+    if(hitCount===0)wins++;
+    else if(hitCount===1)hits1++;
+    else if(hitCount===2)hits2++;
+    else hits3p++;
+  }
+  return{total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p};
+}
+
+function _computeColdRecSim(dh,histStart){
+  if(histStart>=dh.length)return null;
+  var poolSize=39;
+  /* ── Simulated PERIOD_DATA ─────────────────────────────────
+     Pick 8 draws from history (histStart+1 … histStart+50) that
+     share the fewest numbers with the recent 8 draws (lowest overlap). */
+  var recentSet={};
+  for(var j=histStart;j<Math.min(histStart+8,dh.length);j++){
+    for(var k=0;k<dh[j].numbers.length;k++)recentSet[dh[j].numbers[k]]=true;
+  }
+  var periodCands=[];
+  for(var j=histStart+1;j<Math.min(histStart+51,dh.length);j++){
+    var ov=0;
+    for(var k=0;k<dh[j].numbers.length;k++){if(recentSet[dh[j].numbers[k]])ov++;}
+    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov});
+  }
+  periodCands.sort(function(a,b){return a.overlap-b.overlap;});
+  var simPD=periodCands.slice(0,8);
+  /* ── Latest draw markers ─────────────────────────────────── */
+  var latestNums=dh[histStart].numbers;
+  var lastSet={};
+  for(var k=0;k<latestNums.length;k++)lastSet[latestNums[k]]=true;
+  var neighborSet={};
+  for(var k=0;k<latestNums.length;k++){
+    var n=latestNums[k];
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
+  }
+  /* ── Per-number statistics from histStart+1 onward ───────── */
+  var histEnd=Math.min(histStart+101,dh.length);
+  var histDraws=[];
+  for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
+  var simNHD={};var simHPD={};var hotSet={};
+  for(var n=1;n<=poolSize;n++){
+    /* current_miss */
+    var miss=0;
+    for(var j=histStart+1;j<dh.length;j++){
+      if(dh[j].numbers.indexOf(n)!==-1)break;
+      miss++;if(miss>50)break;
+    }
+    /* recent_freq (last 20 draws) */
+    var freq=0;
+    for(var j=0;j<Math.min(20,histDraws.length);j++){
+      if(histDraws[j].indexOf(n)!==-1)freq++;
+    }
+    /* avg_gap */
+    var gaps=[],lastA=-1;
+    for(var j=0;j<histDraws.length;j++){
+      if(histDraws[j].indexOf(n)!==-1){
+        if(lastA!==-1)gaps.push(j-lastA);
+        lastA=j;
+      }
+    }
+    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
+    var dp=Math.min(100,Math.round(miss/Math.max(1,avgGap)*100));
+    simNHD[n]={current_miss:miss,recent_freq:freq,danger_pct:dp,avg_gap:avgGap};
+    /* next_hit_rate (last 50 draws) */
+    var hits50=0,tot50=Math.min(50,histDraws.length);
+    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
+    simHPD[n]={next_hit_rate:tot50>0?Math.round(hits50/tot50*1000)/10:0};
+    if(freq>=4)hotSet[n]=true;
+  }
+  /* ── Cold-filter algorithm (mirrors computeColdFilterRec) ── */
+  function getHP(n){var hp=simHPD[n];return hp?{has:true,rate:hp.next_hit_rate}:{has:false,rate:null};}
+  function hs(n){var h=getHP(n);if(h.has)return h.rate;return simNHD[n]?(simNHD[n].recent_freq||0):0;}
+  function dp2(n){return simNHD[n]?(simNHD[n].danger_pct||0):0;}
+  function cm(n){return simNHD[n]?(simNHD[n].current_miss||0):0;}
+  var selected=[],usedNums={};
+  for(var pi=0;pi<simPD.length&&selected.length<5;pi++){
+    var cands=(simPD[pi].ref_numbers||[]).slice();
+    var remaining=[];
+    for(var ci=0;ci<cands.length;ci++){
+      var cn=cands[ci];
+      if(lastSet[cn]||neighborSet[cn]||hotSet[cn])continue;
+      if(cm(cn)>20)continue;
+      var hp=getHP(cn);
+      if(hp.has&&hp.rate===0)continue;
+      if(usedNums[cn])continue;
+      remaining.push(cn);
+    }
+    if(!remaining.length)continue;
+    remaining.sort(function(a,b){
+      var ha=hs(a),hb=hs(b);
+      if(ha!==hb)return ha-hb;
+      return dp2(a)-dp2(b);
+    });
+    var chosen=remaining[0];
+    usedNums[chosen]=true;
+    selected.push({num:chosen});
+  }
+  return selected.length?selected:null;
+}
+
 /* ── 冷門過濾推薦演算法（v11）── */
 function computeColdFilterRec(key){
   var pd=(window._PERIOD_DATA&&window._PERIOD_DATA[key])||[];
@@ -3801,6 +3986,7 @@ function renderColdFilterPanel(key){
       +r.reason+'</div>';
   }).join('');
   var nums=rec.map(function(r){return r.num;});
+  var activePeriods=_coldBtPeriod[key]||30;
   el.innerHTML='<div class="cold-rec-panel">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
     +'<span style="font-size:.62rem;font-weight:800;color:#0c4a6e">🧊 冷門過濾智能推薦</span>'
@@ -3815,7 +4001,20 @@ function renderColdFilterPanel(key){
     +'font-weight:600;padding:.05rem 0">▶ 查看推理過程</summary>'
     +'<div class="cold-rec-reason">'+reasons+'</div>'
     +'</details>'
+    +'<div class="cold-bt-section" id="pk-cold-bt-'+key+'">'
+    +'<div class="cold-bt-tabs">'
+    +'<span style="font-size:.55rem;color:#0c4a6e;font-weight:700;margin-right:.1rem">📊 歷史回測：</span>'
+    +'<button class="cold-bt-tab'+(activePeriods===30?' active':'')+'" data-p="30" '
+    +'onclick="switchColdBt(\''+key+'\',30)">近30期</button>'
+    +'<button class="cold-bt-tab'+(activePeriods===50?' active':'')+'" data-p="50" '
+    +'onclick="switchColdBt(\''+key+'\',50)">近50期</button>'
+    +'<button class="cold-bt-tab'+(activePeriods===100?' active':'')+'" data-p="100" '
+    +'onclick="switchColdBt(\''+key+'\',100)">近100期</button>'
+    +'</div>'
+    +'<div id="pk-cold-bt-result-'+key+'"></div>'
+    +'</div>'
     +'</div>';
+  renderColdFilterBacktest(key,activePeriods);
 }
 
 function applyRecToSel(key,nums){
@@ -5529,6 +5728,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 "oe_color_data":    oec,
                 "heat_prob_data":   rhp_nums,
                 "rev_oe_data":      rev_oe_resp or {},
+                "draw_history_data": result_data["period_result"].get("draw_history_150", []),
             }
             if not is_hist:
                 resp["max_date"] = result_data["max_date"]
