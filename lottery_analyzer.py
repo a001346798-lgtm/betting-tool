@@ -878,6 +878,57 @@ class LotteryScrapers:
         clean.sort(key=lambda x: x["date"], reverse=True)
         return clean[:count]
 
+    @staticmethod
+    def _expected_latest_for_config(cfg: Dict) -> _date:
+        tz_name = cfg.get("draw_timezone", "UTC")
+        ready = str(cfg.get("result_ready_time", "00:00"))
+        try:
+            now_local = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            now_local = datetime.now()
+        try:
+            hour_s, minute_s = ready.split(":", 1)
+            ready_minutes = int(hour_s) * 60 + int(minute_s)
+        except Exception:
+            ready_minutes = 0
+        expected = now_local.date()
+        if now_local.hour * 60 + now_local.minute < ready_minutes:
+            expected = expected - timedelta(days=1)
+        draw_weekdays = cfg.get("draw_weekdays")
+        if draw_weekdays:
+            allowed = {int(x) for x in draw_weekdays}
+            while expected.weekday() not in allowed:
+                expected = expected - timedelta(days=1)
+        return expected
+
+    @classmethod
+    def _scrape_ny_open_data_take5(cls, count: int,
+                                   dataset_id: str = "dg63-4siq") -> List[Dict]:
+        limit = min(max(count + 20, 30), 500)
+        params = (
+            f"?$select=draw_date,evening_winning_numbers"
+            f"&$where=evening_winning_numbers%20IS%20NOT%20NULL"
+            f"&$order=draw_date%20DESC"
+            f"&$limit={limit}"
+        )
+        data = cls._json(
+            f"https://data.ny.gov/resource/{dataset_id}.json{params}",
+            headers=cls.JSON_HEADERS,
+            referer=f"https://data.ny.gov/d/{dataset_id}",
+        )
+        draws: List[Dict] = []
+        if isinstance(data, list):
+            for d in data:
+                if not isinstance(d, dict):
+                    continue
+                draw = cls._draw(
+                    d.get("draw_date"),
+                    d.get("evening_winning_numbers"),
+                )
+                if draw:
+                    draws.append(draw)
+        return cls._clean_draws(draws, count)
+
     @classmethod
     def _best_source(cls, label: str, count: int,
                      sources: List[Tuple[str, Callable[[], List[Dict]]]]) -> List[Dict]:
@@ -1216,13 +1267,24 @@ class LotteryScrapers:
     def scrape_newyork_take5_bulk(cls, count: int = 30) -> List[Dict]:
         """NY Take 5 晚盤（Evening）。
 
-        策略：同時抓 lotto.net 與 NY Open Data，合併去重後取最新。
-        lotto.net 通常當天即更新；NY Open Data 可能延遲 1 天以上。
-        兩源互為 fallback，防止任一來源落後時漏抓最新一期。
+        策略：先抓官方 NY Open Data JSON；如果已到預期最新日就立即返回。
+        官方源延遲時，再抓 lotto.net / LotteryPost 做 fallback。
         """
+        expected_latest = cls._expected_latest_for_config(LOTTERY_CONFIG["newyork_take5"])
         pool: List[Dict] = []
 
-        # ── Source A: lotto.net（通常最即時）──────────────────
+        # ── Source A: NY Open Data official JSON（最快且最穩）────
+        nyod_draws = cls._scrape_ny_open_data_take5(count=count)
+        if nyod_draws:
+            nyod_latest = nyod_draws[0]["date"]
+            print(f"[SCRAPER] NY Take5 evening: NY Open Data latest {nyod_latest}")
+            if pd.to_datetime(nyod_latest).date() >= expected_latest:
+                return nyod_draws
+            pool.extend(nyod_draws)
+        else:
+            print("[SCRAPER] NY Take5 evening: NY Open Data 無回應或無資料")
+
+        # ── Source B: lotto.net（官方源延遲時補位）───────────────
         lotto_draws: List[Dict] = []
         cur_year = datetime.now().year
         for y in range(cur_year, cur_year - 2, -1):
@@ -1245,32 +1307,6 @@ class LotteryScrapers:
             print("[SCRAPER] NY Take5 evening: lotto.net 無回應或無資料 — "
                   "time_filter 可能需要更新（預期篩選字串：'10:30'）")
         pool.extend(lotto_draws)
-
-        # ── Source B: NY Open Data（可能延遲，但資料齊全）────────
-        nyod_draws: List[Dict] = []
-        limit = min(max(count + 20, 100), 50000)
-        nyod_url = (
-            "https://data.ny.gov/resource/dg63-4siq.json"
-            f"?$limit={limit}&$order=draw_date%20DESC"
-        )
-        data = cls._json(nyod_url, headers=cls.JSON_HEADERS,
-                         referer="https://data.ny.gov/d/dg63-4siq")
-        if isinstance(data, list):
-            for d in data:
-                if not isinstance(d, dict):
-                    continue
-                draw = cls._draw(
-                    d.get("draw_date"),
-                    d.get("evening_winning_numbers"),
-                )
-                if draw:
-                    nyod_draws.append(draw)
-        if nyod_draws:
-            nyod_latest = max(d["date"] for d in nyod_draws)
-            print(f"[SCRAPER] NY Take5 evening: NY Open Data latest {nyod_latest}")
-        else:
-            print("[SCRAPER] NY Take5 evening: NY Open Data 無回應或無資料")
-        pool.extend(nyod_draws)
 
         lp_draws = cls._scrape_lotterypost("ny/take5", count=count, draw_label="Evening")
         if lp_draws:
@@ -5633,7 +5669,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         try:
             sync_rpt = syncer.sync_all()
             details  = []
-            rebuilt  = False
+            has_new  = False
             for key, info in sync_rpt.items():
                 cfg = LOTTERY_CONFIG[key]
                 ok  = (
@@ -5642,7 +5678,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                     and "來源尚未提供" not in info["message"]
                 )
                 if info["new_count"] > 0:
-                    rebuilt = True
+                    has_new = True
                 sync_meta = ""
                 if info.get("latest_local") or info.get("expected_latest"):
                     sync_meta = f"（目前 {info.get('latest_local', '-')}, 應有 {info.get('expected_latest', '-')}"
@@ -5653,11 +5689,13 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                     "ok":  ok,
                     "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）{sync_meta}",
                 })
-            try:
-                _rebuild_report()
-                rebuilt = True
-            except Exception as e:
-                print(f"[ERROR] analyzer.run after sync: {e}")
+            rebuilt = False
+            if has_new or _report_needs_rebuild():
+                try:
+                    _rebuild_report()
+                    rebuilt = True
+                except Exception as e:
+                    print(f"[ERROR] analyzer.run after sync: {e}")
             return jsonify({"rebuilt": rebuilt, "details": details})
         except Exception as e:
             import traceback
