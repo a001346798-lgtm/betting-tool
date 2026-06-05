@@ -168,20 +168,25 @@ class DataLoader:
         try:
             df = self._fetch(lottery_key, cutoff_date)
         except Exception as e:
-            print(f"  [SKIP] {config['name']}：Supabase 讀取失敗 — {e}")
-            return None
+            print(f"  [WARN] {config['name']}：Supabase 讀取失敗 — {e}，改讀本機 CSV")
+            df = self._fetch_local_csv(config, cutoff_date)
         if df is None or df.empty:
-            print(f"  [SKIP] {config['name']}：Supabase 無資料（{lottery_key}）")
-            return None
+            df = self._fetch_local_csv(config, cutoff_date)
+            if df is None or df.empty:
+                print(f"  [SKIP] {config['name']}：Supabase/本機 CSV 均無資料（{lottery_key}）")
+                return None
         return df
 
     def load_silent(self, lottery_key: str, config: Dict,
                     cutoff_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
         """無輸出的靜默版本，供自動同步、時光機使用。"""
         try:
-            return self._fetch(lottery_key, cutoff_date)
+            df = self._fetch(lottery_key, cutoff_date)
         except Exception:
-            return None
+            df = None
+        if df is None or df.empty:
+            df = self._fetch_local_csv(config, cutoff_date)
+        return df
 
     # ── Internal Supabase fetch with pagination ──────────────────
 
@@ -222,6 +227,42 @@ class DataLoader:
         for c in ("n1", "n2", "n3", "n4", "n5"):
             df[c] = df[c].astype(int)
         return df.sort_values("date").reset_index(drop=True)
+
+    def _fetch_local_csv(self, config: Dict,
+                         cutoff_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
+        paths = []
+        csv_name = config.get("csv_filename")
+        if csv_name:
+            paths.append(self.data_dir / csv_name)
+        for pattern in config.get("file_patterns", []):
+            paths.extend(sorted(self.data_dir.glob(pattern + ".csv")))
+        csv_path = next((p for p in paths if p.exists()), None)
+        if csv_path is None:
+            return None
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception as e:
+            print(f"  [WARN] {config['name']}：本機 CSV 讀取失敗 — {e}")
+            return None
+        cols = {c: str(c).strip().lower() for c in df.columns}
+        df = df.rename(columns=cols)
+        required = ["date", "n1", "n2", "n3", "n4", "n5"]
+        if not all(c in df.columns for c in required):
+            print(f"  [WARN] {config['name']}：本機 CSV 欄位不完整 — {csv_path.name}")
+            return None
+        df = df[required].copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        for c in ("n1", "n2", "n3", "n4", "n5"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=required)
+        for c in ("n1", "n2", "n3", "n4", "n5"):
+            df[c] = df[c].astype(int)
+        if cutoff_date is not None:
+            cutoff = pd.to_datetime(cutoff_date)
+            df = df[df["date"] <= cutoff]
+        if df.empty:
+            return None
+        return df.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
     # ── Gap detection (pure pandas, no I/O) ─────────────────────
 
@@ -1941,7 +1982,7 @@ tr.stripe td{background:#f8fafc}
 .cold-modal-body .cold-cause-row{font-size:.76rem;padding:.12rem 0}
 .cold-modal-body .cold-cause-case{font-size:.74rem}
 .cold-modal-body .cold-cause-sug{font-size:.74rem}
-@media(max-width:520px){.cold-cause-grid,.cold-rule-grid,.miss-rank-grid{grid-template-columns:1fr}}
+@media(max-width:520px){.cold-cause-grid,.cold-rule-grid,.miss-rank-grid,.consensus-cause-grid,.arb-grid{grid-template-columns:1fr}}
 /* ── v13: 連敗警報 / 共識面板 / 陷阱率 / 自適應參數 / 五選中一 ── */
 .streak-alert-box{border-radius:.45rem;padding:.26rem .42rem;margin-bottom:.22rem;font-size:.6rem;font-weight:700;display:flex;align-items:center;gap:.3rem;line-height:1.5}
 .streak-alert-warn{background:#fef3c7;border:1px solid #fcd34d;color:#92400e}
@@ -1963,6 +2004,26 @@ tr.stripe td{background:#f8fafc}
 .consensus-cause-row:last-child{border-bottom:none}
 .consensus-case-line{font-size:.56rem;color:#475569;line-height:1.55;padding:.04rem 0;border-bottom:1px solid #f0fdf4}
 .consensus-sug{margin-top:.2rem;font-size:.58rem;color:#14532d;background:#f0fdf4;border:1px solid #86efac;border-radius:.35rem;padding:.2rem .28rem;line-height:1.65}
+.arb-panel{background:linear-gradient(135deg,#eef2ff,#f8fafc);border:1.5px solid #818cf8;border-radius:.7rem;padding:.5rem .6rem;margin-bottom:.45rem}
+.arb-head{display:flex;justify-content:space-between;align-items:center;gap:.45rem;margin-bottom:.2rem;flex-wrap:wrap}
+.arb-title{font-size:.66rem;font-weight:900;color:#312e81}
+.arb-badge{font-size:.58rem;font-weight:900;border-radius:.35rem;padding:.16rem .42rem;white-space:nowrap}
+.arb-badge-go{background:#dcfce7;color:#166534;border:1px solid #86efac}
+.arb-badge-stop{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+.arb-controls{display:flex;gap:.35rem;align-items:end;flex-wrap:wrap;margin:.18rem 0 .3rem}
+.arb-field{display:flex;flex-direction:column;gap:.08rem;font-size:.54rem;color:#4338ca;font-weight:800}
+.arb-field input{height:1.55rem;width:4.2rem;border:1px solid #c7d2fe;border-radius:.32rem;background:#fff;color:#0f172a;font-size:.62rem;padding:0 .32rem}
+.arb-tabs{display:flex;gap:.18rem;align-items:center;margin:.18rem 0 .22rem;flex-wrap:wrap}
+.arb-tab{font-size:.55rem;padding:.1rem .28rem;border:1px solid #a5b4fc;border-radius:.28rem;background:#fff;color:#4338ca;cursor:pointer;font-weight:700;line-height:1.5}
+.arb-tab.active{background:#4338ca;color:#fff;border-color:#4338ca}
+.arb-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:.38rem;margin-top:.25rem}
+.arb-card{background:rgba(255,255,255,.75);border:1px solid #c7d2fe;border-radius:.45rem;padding:.32rem .38rem}
+.arb-card-title{font-size:.6rem;font-weight:900;color:#4338ca;margin-bottom:.14rem}
+.arb-row{display:flex;justify-content:space-between;gap:.3rem;font-size:.57rem;color:#334155;border-bottom:1px solid rgba(199,210,254,.55);padding:.07rem 0;line-height:1.45}
+.arb-row:last-child{border-bottom:none}
+.arb-ticket{display:flex;gap:.22rem;flex-wrap:wrap;align-items:center;margin:.16rem 0}
+.arb-apply{font-size:.57rem;padding:.12rem .34rem;border:none;border-radius:.3rem;background:#4338ca;color:#fff;cursor:pointer;font-weight:800;white-space:nowrap}
+.arb-note{font-size:.55rem;color:#64748b;line-height:1.55;margin-top:.12rem}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -2894,6 +2955,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
                 '</div>'
             )
         return (
+            # ── Strategy arbitrator panel
+            '<div id="pk-arb-rec-' + key + '"></div>'
             # ── Cold-filter recommendation panel (v11)
             '<div id="pk-cold-rec-' + key + '"></div>'
             # ── Miss-rank recommendation panel
@@ -3405,6 +3468,7 @@ function switchTab(key){
   _renderMissDist(key);
   renderBetLog(key);
   _restoreLock(key);
+  renderStrategyArbPanel(key);
   renderColdFilterPanel(key);
   renderMissRankFilterPanel(key);
   renderConsensusBtPanel(key);
@@ -3555,8 +3619,8 @@ function _btStore(key,d){
   if(d.rev_oe_data){      window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
   if(d.draw_history_data){window._DRAW_HISTORY=window._DRAW_HISTORY||{};    window._DRAW_HISTORY[key]=d.draw_history_data;
     // Invalidate backtest cache for this key when draw history changes
-    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _consBtCache[key+'_'+p];});
-    delete _autoParamCache[key+'_50'];
+    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _consBtCache[key+'_'+p];delete _arbCache[key+'_'+p];});
+    _clearDecisionCaches(key);
     _missRankClearBtCache(key);
   }
 }
@@ -3580,6 +3644,7 @@ function updateSelectionBoard(key){
   _renderMissDist(key);          // 遺漏分佈直方圖
   renderBetLog(key);             // 投注紀錄命中對比
   renderOEColorGuide(key);       // 今日配比推薦（v10.2）
+  renderStrategyArbPanel(key);   // 策略仲裁器
   renderColdFilterPanel(key);    // 冷門過濾智能推薦（v11）
   renderMissRankFilterPanel(key); // 遺漏排行篩選推薦
   renderConsensusBtPanel(key);   // 雙策略共識獨立面板（v13.1）
@@ -3838,6 +3903,21 @@ var _coldBtPeriod={};
 var _missRankBtCache={};
 var _missRankBtPeriod={};
 var _consBtPeriod={};
+var _arbCache={};
+var _arbPeriod={};
+
+function _clearPrefixCache(obj,key){
+  if(!obj)return;
+  Object.keys(obj).forEach(function(k){
+    if(k.indexOf(key+'_')===0)delete obj[k];
+  });
+}
+
+function _clearDecisionCaches(key){
+  if(typeof _consBtCache!=='undefined')_clearPrefixCache(_consBtCache,key);
+  if(typeof _autoParamCache!=='undefined')_clearPrefixCache(_autoParamCache,key);
+  _clearPrefixCache(_arbCache,key);
+}
 
 function _coldFilterRule(key){
   var base={
@@ -3900,6 +3980,7 @@ function _coldClearBtCache(key){
   Object.keys(_coldBtCache).forEach(function(k){
     if(k.indexOf(key+'_')===0)delete _coldBtCache[k];
   });
+  _clearDecisionCaches(key);
 }
 
 function _coldStatValue(n,metric,fns){
@@ -4065,6 +4146,7 @@ function _missRankClearBtCache(key){
   Object.keys(_missRankBtCache).forEach(function(k){
     if(k.indexOf(key+'_')===0)delete _missRankBtCache[k];
   });
+  _clearDecisionCaches(key);
 }
 
 function _missRankRuleSummary(rule){
@@ -4397,6 +4479,7 @@ function runMissRankBacktest(key,periods){
   if(dh.length<periods+5)return null;
   var rule=_missRankRule(key);
   var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  var missLoseStreak=0,maxMissLossStreak=0,oneLoseStreak=0,maxOneLossStreak=0;
   var causeAll={},exactHit1={},exactHit2={},numHits={},cases=[];
   var maxTrials=Math.min(periods,dh.length-2);
   function add(bucket,label){bucket[label]=(bucket[label]||0)+1;}
@@ -4409,10 +4492,11 @@ function runMissRankBacktest(key,periods){
     simRec.forEach(function(r){if(actualNums.indexOf(r.num)!==-1)hitRecs.push(r);});
     var hitCount=hitRecs.length;
     hitSum+=hitCount;
-    if(hitCount===0)wins++;
-    else if(hitCount===1)hits1++;
+    if(hitCount===0){wins++;missLoseStreak=0;}else{missLoseStreak++;if(missLoseStreak>maxMissLossStreak)maxMissLossStreak=missLoseStreak;}
+    if(hitCount===1){oneLoseStreak=0;}else{oneLoseStreak++;if(oneLoseStreak>maxOneLossStreak)maxOneLossStreak=oneLoseStreak;}
+    if(hitCount===1)hits1++;
     else if(hitCount===2)hits2++;
-    else hits3p++;
+    else if(hitCount>2)hits3p++;
     hitRecs.forEach(function(r){
       numHits[r.num]=(numHits[r.num]||0)+1;
       _missRankLabels(r).forEach(function(label){add(causeAll,label);});
@@ -4431,6 +4515,8 @@ function runMissRankBacktest(key,periods){
     hitSum:hitSum,
     avgHits:total?Math.round(hitSum/total*100)/100:0,
     avgLossHits:loss?Math.round(hitSum/loss*100)/100:0,
+    maxMissLossStreak:maxMissLossStreak,
+    maxOneLossStreak:maxOneLossStreak,
     causeAll:causeAll,exactHit1:exactHit1,exactHit2:exactHit2,numHits:numHits,cases:cases
   };
 }
@@ -4664,6 +4750,7 @@ function runColdFilterBacktest(key,periods){
   if(dh.length<periods+5)return null;
   var rule=_coldFilterRule(key);
   var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  var missLoseStreak=0,maxMissLossStreak=0,oneLoseStreak=0,maxOneLossStreak=0;
   var causeAll={},causeHit1={},causeHit2={},causeHit3p={},pairHit2={},numHits={},numRec={},cases=[];
   var exactHit1={},exactHit2First={},exactHit2Second={},exactPair2={};
   var maxTrials=Math.min(periods,dh.length-2);
@@ -4683,10 +4770,10 @@ function runColdFilterBacktest(key,periods){
       }
     }
     hitSum+=hitCount;
-    if(hitCount===0)wins++;
-    else if(hitCount===1)hits1++;
-    else if(hitCount===2)hits2++;
-    else hits3p++;
+    if(hitCount===0){wins++;missLoseStreak=0;}else{missLoseStreak++;if(missLoseStreak>maxMissLossStreak)maxMissLossStreak=missLoseStreak;}
+    if(hitCount===1){hits1++;oneLoseStreak=0;}else{oneLoseStreak++;if(oneLoseStreak>maxOneLossStreak)maxOneLossStreak=oneLoseStreak;}
+    if(hitCount===2)hits2++;
+    else if(hitCount>2)hits3p++;
     if(hitRecs.length){
       var bucket=hitCount===1?causeHit1:(hitCount===2?causeHit2:causeHit3p);
       hitRecs.forEach(function(r){
@@ -4727,6 +4814,8 @@ function runColdFilterBacktest(key,periods){
     hitSum:hitSum,
     avgHits:total?Math.round(hitSum/total*100)/100:0,
     avgLossHits:loss?Math.round(hitSum/loss*100)/100:0,
+    maxMissLossStreak:maxMissLossStreak,
+    maxOneLossStreak:maxOneLossStreak,
     rule:rule,
     causeAll:causeAll,
     causeHit1:causeHit1,
@@ -5454,36 +5543,141 @@ function _computeColdRecSimWithParams(dh,histStart,params){
 }
 
 var _autoParamCache={};
-function _autoParamScan(key,periods){
-  /* 走前驗證：每期預測只用該期「之前」的歷史，絕無未來資料 */
-  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
-  if(dh.length<periods+5)return null;
+
+function _recNums(rec){
+  return (rec||[]).map(function(r){return typeof r==='number'?r:(r&&r.num);})
+    .filter(function(n,i,a){return !!n&&a.indexOf(n)===i;});
+}
+
+function _hitCountNums(nums,actual){
+  actual=actual||[];
+  var c=0;
+  (nums||[]).forEach(function(n){if(actual.indexOf(n)!==-1)c++;});
+  return c;
+}
+
+function _ratePct(wins,total){
+  return total?Math.round(wins/total*1000)/10:0;
+}
+
+function _evScore(rate,payout){
+  payout=Number(payout||1);
+  var p=(Number(rate)||0)/100;
+  return p*payout-(1-p);
+}
+
+function _autoParamGrid(){
   var grid=[];
   [10,15,20,25,30].forEach(function(mm){
     [3,4,5].forEach(function(hf){grid.push({maxMiss:mm,hotFreqCutoff:hf});});
   });
-  var best=null,bestRate=-1;
-  var maxTrials=Math.min(periods,dh.length-2);
+  return grid;
+}
+
+function _paramKey(p){return p.maxMiss+'|'+p.hotFreqCutoff;}
+function _paramLabel(p){return '遺漏<='+p.maxMiss+' / 熱門線>='+p.hotFreqCutoff;}
+
+function _scoreAutoParamsOnWindow(dh,start,trainPeriods,params){
+  var end=Math.min(start+trainPeriods,dh.length-2);
+  var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  for(var j=start;j<end;j++){
+    var rec=_computeColdRecSimWithParams(dh,j+1,params);
+    var nums=_recNums(rec).slice(0,5);
+    if(nums.length<5)continue;
+    total++;
+    var hit=_hitCountNums(nums,dh[j].numbers);
+    hitSum+=hit;
+    if(hit===0)wins++;
+    else if(hit===1)hits1++;
+    else if(hit===2)hits2++;
+    else hits3p++;
+  }
+  return {
+    params:params,total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p,
+    hitSum:hitSum,
+    winRate:total?wins/total:0,
+    oneRate:total?hits1/total:0,
+    avgHits:total?hitSum/total:0
+  };
+}
+
+function _chooseAutoParamsBefore(dh,start,trainPeriods,grid,mode){
+  var best=null,bestScore=-999;
   grid.forEach(function(params){
-    var wins=0,total=0;
-    for(var i=0;i<maxTrials;i++){
-      var simRec=_computeColdRecSimWithParams(dh,i+1,params);
-      if(!simRec||!simRec.length)continue;
-      total++;
-      var actual=dh[i].numbers,hit=0;
-      for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1)hit++;}
-      if(hit===0)wins++;
+    var s=_scoreAutoParamsOnWindow(dh,start,trainPeriods,params);
+    if(s.total<10)return;
+    var score;
+    if(mode==='one1'){
+      score=s.oneRate+(s.winRate*.03)-(Math.abs(s.avgHits-1)*.08);
+    }else{
+      score=s.winRate+(s.oneRate*.12)-(s.avgHits*.08);
     }
-    if(total<10)return;
-    var rate=wins/total;
-    if(rate>bestRate){bestRate=rate;best={params:params,wins:wins,total:total,rate:rate};}
+    if(score>bestScore){
+      bestScore=score;
+      best=s;
+    }
   });
   return best;
+}
+function _autoParamScan(key,periods,mode){
+  mode=mode||'miss0';
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  var grid=_autoParamGrid();
+  var trainPeriods=dh.length>=periods+52?50:(dh.length>=periods+32?30:20);
+  if(dh.length<periods+trainPeriods+2)return null;
+  var maxTrials=Math.min(periods,dh.length-trainPeriods-2);
+  if(maxTrials<10)return null;
+  var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  var missLoseStreak=0,maxMissLossStreak=0,oneLoseStreak=0,maxOneLossStreak=0;
+  var paramUse={},cases=[];
+  for(var i=0;i<maxTrials;i++){
+    var chosen=_chooseAutoParamsBefore(dh,i+1,trainPeriods,grid,mode);
+    if(!chosen)continue;
+    var simRec=_computeColdRecSimWithParams(dh,i+1,chosen.params);
+    var nums=_recNums(simRec).slice(0,5);
+    if(nums.length<5)continue;
+    total++;
+    var pk=_paramKey(chosen.params);
+    paramUse[pk]=(paramUse[pk]||0)+1;
+    var hit=_hitCountNums(nums,dh[i].numbers);
+    hitSum+=hit;
+    if(hit===0){wins++;missLoseStreak=0;}else{missLoseStreak++;if(missLoseStreak>maxMissLossStreak)maxMissLossStreak=missLoseStreak;}
+    if(hit===1){hits1++;oneLoseStreak=0;}else{oneLoseStreak++;if(oneLoseStreak>maxOneLossStreak)maxOneLossStreak=oneLoseStreak;}
+    if(hit===2)hits2++;
+    else if(hit>2)hits3p++;
+    if(hit&&cases.length<5)cases.push({date:dh[i].date||'',hit:hit,nums:nums,params:chosen.params});
+  }
+  if(total<10)return null;
+  var current=_chooseAutoParamsBefore(dh,0,trainPeriods,grid,mode);
+  var fallbackParams=null,bestUse=0;
+  Object.keys(paramUse).forEach(function(k){
+    if(paramUse[k]>bestUse){
+      bestUse=paramUse[k];
+      var parts=k.split('|');
+      fallbackParams={maxMiss:parseInt(parts[0]),hotFreqCutoff:parseInt(parts[1])};
+    }
+  });
+  var params=(current&&current.params)||fallbackParams||{maxMiss:20,hotFreqCutoff:4};
+  return {
+    mode:'nested_walk_forward',
+    targetMode:mode,
+    params:params,
+    currentTrain:current,
+    trainPeriods:trainPeriods,
+    gridCount:grid.length,
+    wins:wins,total:total,rate:wins/total,
+    hits1:hits1,hits2:hits2,hits3p:hits3p,hitSum:hitSum,
+    avgHits:total?Math.round(hitSum/total*100)/100:0,
+    maxMissLossStreak:maxMissLossStreak,
+    maxOneLossStreak:maxOneLossStreak,
+    paramUse:paramUse,
+    cases:cases
+  };
 }
 function applyParamSuggestion(key,mm,hf){
   var rule=_coldFilterRule(key);rule.maxMiss=mm;rule.hotFreqCutoff=hf;
   try{localStorage.setItem('coldFilterRule_'+key,JSON.stringify(rule));}catch(e){}
-  _coldClearBtCache(key);delete _autoParamCache[key+'_50'];
+  _coldClearBtCache(key);
   renderColdFilterPanel(key);
 }
 function renderAutoParamSuggestion(key){
@@ -5491,9 +5685,9 @@ function renderAutoParamSuggestion(key){
   if(!el)return;
   el.innerHTML='<span style="color:#475569;font-size:.57rem">掃描中（15組參數×近50期走前驗證）…</span>';
   setTimeout(function(){
-    var cacheKey=key+'_50';
+    var cacheKey=key+'_50_miss0';
     var res=_autoParamCache[cacheKey];
-    if(!res){res=_autoParamScan(key,50);if(res)_autoParamCache[cacheKey]=res;}
+    if(!res){res=_autoParamScan(key,50,'miss0');if(res)_autoParamCache[cacheKey]=res;}
     if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法掃描</span>';return;}
     var rule=_coldFilterRule(key);
     var rate=Math.round(res.rate*1000)/10;
@@ -5514,6 +5708,53 @@ function renderAutoParamSuggestion(key){
    絕不讀取 dh[i]（待預測期）之前的 dh[i-1]...dh[0]。
    ══════════════════════════════════════════════════════════════ */
 var _consBtCache={};
+function _buildConsensusTicket(coldRec,missRec){
+  coldRec=coldRec||[];
+  missRec=missRec||[];
+  var coldRank={},missRank={},info={};
+  coldRec.forEach(function(r,i){
+    var n=typeof r==='number'?r:r.num;
+    if(!n)return;
+    coldRank[n]=i+1;
+    info[n]=info[n]||{};
+    info[n].cold=true;
+  });
+  missRec.forEach(function(r,i){
+    var n=typeof r==='number'?r:r.num;
+    if(!n)return;
+    missRank[n]=i+1;
+    info[n]=info[n]||{};
+    info[n].miss=true;
+  });
+  var consensus=[];
+  Object.keys(coldRank).forEach(function(k){
+    var n=parseInt(k);
+    if(missRank[n])consensus.push(n);
+  });
+  consensus.sort(function(a,b){
+    return (coldRank[a]+missRank[a])-(coldRank[b]+missRank[b])||coldRank[a]-coldRank[b];
+  });
+  var used={},ticket=[],sourceMap={};
+  function add(n,src){
+    if(!n||used[n]||ticket.length>=5)return;
+    used[n]=true;
+    ticket.push(n);
+    sourceMap[n]=src;
+  }
+  consensus.forEach(function(n){add(n,'consensus');});
+  var pool=[];
+  Object.keys(info).forEach(function(k){
+    var n=parseInt(k);
+    if(used[n])return;
+    var cr=coldRank[n]||99,mr=missRank[n]||99;
+    var src=coldRank[n]&&missRank[n]?'consensus':(coldRank[n]?'coldFill':'missFill');
+    pool.push({num:n,score:cr+mr,cold:cr,miss:mr,src:src});
+  });
+  pool.sort(function(a,b){return a.score-b.score||a.cold-b.cold||a.miss-b.miss||a.num-b.num;});
+  pool.forEach(function(x){add(x.num,x.src);});
+  return {consNums:consensus,ticketNums:ticket,sourceMap:sourceMap,coldRank:coldRank,missRank:missRank};
+}
+
 function runConsensusBacktest(key,periods){
   var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
   if(dh.length<periods+5)return null;
@@ -5739,6 +5980,388 @@ function renderConsensusBtPanel(key){
   renderConsensusBacktest(key,activePeriods);
 }
 
+/* ── v13.2: strict consensus and strategy arbitrator overrides ── */
+function runConsensusBacktest(key,periods){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var consensusWins=0,consensusLosses=0,ticketWins=0,ticketLosses=0,total=0,skips=0;
+  var hits1=0,hits2=0,hits3p=0,hitSum=0;
+  var missLoseStreak=0,maxMissLossStreak=0,oneLoseStreak=0,maxOneLossStreak=0;
+  var numHits={},numRec={},consNumHits={},consNumRec={};
+  var srcHits={consensus:0,coldFill:0,missFill:0};
+  var statBuckets={miss:{},heat:{},danger:{}};
+  var drawPatterns={odd:{},color:{},consec:{Y:0,N:0}};
+  var failCases=[];
+  var mrRule=_missRankRule(key);
+  var maxTrials=Math.min(periods,dh.length-2);
+  function bucket3(v,thresholds,labels){
+    for(var bi=0;bi<thresholds.length;bi++){if(v<thresholds[bi])return labels[bi];}
+    return labels[labels.length-1];
+  }
+  for(var i=0;i<maxTrials;i++){
+    var histStart=i+1;
+    var coldSim=_computeColdRecSim(key,dh,histStart);
+    var missSim=_computeMissRankRecSim(key,dh,histStart);
+    if(!coldSim||!coldSim.length||!missSim||!missSim.length){skips++;continue;}
+    var built=_buildConsensusTicket(coldSim,missSim);
+    if(!built.consNums.length||built.ticketNums.length<5){skips++;continue;}
+    total++;
+    built.consNums.forEach(function(n){consNumRec[n]=(consNumRec[n]||0)+1;});
+    built.ticketNums.forEach(function(n){numRec[n]=(numRec[n]||0)+1;});
+    var actual=dh[i].numbers;
+    var consHitNums=built.consNums.filter(function(n){return actual.indexOf(n)!==-1;});
+    if(!consHitNums.length)consensusWins++;else consensusLosses++;
+    consHitNums.forEach(function(n){consNumHits[n]=(consNumHits[n]||0)+1;});
+    var hitNums=built.ticketNums.filter(function(n){return actual.indexOf(n)!==-1;});
+    var hitCount=hitNums.length;
+    hitSum+=hitCount;
+    if(hitCount===0){ticketWins++;missLoseStreak=0;}else{ticketLosses++;missLoseStreak++;if(missLoseStreak>maxMissLossStreak)maxMissLossStreak=missLoseStreak;}
+    if(hitCount===1){hits1++;oneLoseStreak=0;}else{oneLoseStreak++;if(oneLoseStreak>maxOneLossStreak)maxOneLossStreak=oneLoseStreak;}
+    if(hitCount===2)hits2++;
+    else if(hitCount>2)hits3p++;
+    if(!hitNums.length)continue;
+    var simData=_missRankBuildSimData(dh,histStart,mrRule);
+    hitNums.forEach(function(n){
+      numHits[n]=(numHits[n]||0)+1;
+      var src=built.sourceMap[n]||'coldFill';
+      srcHits[src]=(srcHits[src]||0)+1;
+      var nd=simData.nhd[n]||{},hp=simData.hpd[n]||{};
+      var miss=nd.current_miss||0,heat=hp.next_hit_rate||0,dp=nd.danger_pct||0;
+      var mb=bucket3(miss,[5,10,20],['遺漏0-4','遺漏5-9','遺漏10-19','遺漏20+']);
+      var hb=bucket3(heat,[8,15,22],['熱<8%','熱8-14%','熱15-21%','熱22%+']);
+      var db=bucket3(dp,[40,70],['危<40%','危40-69%','危70%+']);
+      statBuckets.miss[mb]=(statBuckets.miss[mb]||0)+1;
+      statBuckets.heat[hb]=(statBuckets.heat[hb]||0)+1;
+      statBuckets.danger[db]=(statBuckets.danger[db]||0)+1;
+    });
+    var sorted=actual.slice().sort(function(a,b){return a-b;});
+    var oddC=sorted.filter(function(n){return n%2===1;}).length;
+    var redC=sorted.filter(function(n){return n%3===1;}).length;
+    var blueC=sorted.filter(function(n){return n%3===2;}).length;
+    var hasC=false;for(var j=0;j<sorted.length-1;j++){if(sorted[j+1]-sorted[j]===1){hasC=true;break;}}
+    var ok=oddC+'單'+(5-oddC)+'雙';
+    var ck=redC+'紅'+blueC+'藍'+(5-redC-blueC)+'綠';
+    drawPatterns.odd[ok]=(drawPatterns.odd[ok]||0)+1;
+    drawPatterns.color[ck]=(drawPatterns.color[ck]||0)+1;
+    drawPatterns.consec[hasC?'Y':'N']++;
+    if(failCases.length<8){
+      failCases.push({
+        date:dh[i].date||'',ticketNums:built.ticketNums,consNums:built.consNums,
+        hitNums:hitNums,hitCount:hitCount,actual:sorted,odd:oddC,consec:hasC,
+        hitInfo:hitNums.map(function(n){
+          var nd=simData.nhd[n]||{},hp=simData.hpd[n]||{};
+          var cr=built.coldRank[n],mr=built.missRank[n];
+          var srcLabel=built.sourceMap[n]==='consensus'?'共識':(built.sourceMap[n]==='coldFill'?'冷門補位':'遺漏補位');
+          return{num:n,src:srcLabel+(cr?'/冷'+cr:'')+(mr?'/遺'+mr:''),miss:nd.current_miss||0,heat:hp.next_hit_rate||0,dp:nd.danger_pct||0};
+        })
+      });
+    }
+  }
+  return{
+    total:total,skips:skips,
+    consensusWins:consensusWins,consensusLosses:consensusLosses,
+    ticketWins:ticketWins,ticketLosses:ticketLosses,wins:ticketWins,losses:ticketLosses,
+    hits1:hits1,hits2:hits2,hits3p:hits3p,hitSum:hitSum,
+    avgHits:total?Math.round(hitSum/total*100)/100:0,
+    maxMissLossStreak:maxMissLossStreak,maxOneLossStreak:maxOneLossStreak,
+    numHits:numHits,numRec:numRec,consNumHits:consNumHits,consNumRec:consNumRec,
+    srcHits:srcHits,statBuckets:statBuckets,drawPatterns:drawPatterns,failCases:failCases
+  };
+}
+
+function renderConsensusBacktest(key,periods){
+  var el=document.getElementById('pk-cons-bt-res-'+key);
+  if(!el)return;
+  var cacheKey=key+'_'+periods;
+  var res=_consBtCache[cacheKey];
+  if(!res){res=runConsensusBacktest(key,periods);if(res)_consBtCache[cacheKey]=res;}
+  if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法回測</span>';return;}
+  if(!res.total){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">這段期間沒有可補滿 5 支的共識票</span>';return;}
+  function ns(n){return(n<10?'0':'')+n;}
+  function topBucket(obj){
+    var top='',cnt=0;Object.keys(obj||{}).forEach(function(k){if((obj[k]||0)>cnt){cnt=obj[k];top=k;}});
+    return top?(top+'('+cnt+'次)'):'--';
+  }
+  var ticketRate=_ratePct(res.ticketWins,res.total);
+  var consRate=_ratePct(res.consensusWins,res.total);
+  var rateC=ticketRate>=55?'#16a34a':ticketRate>=48?'#d97706':'#dc2626';
+  var trapList=Object.keys(res.numRec).map(function(n){
+    var rec=res.numRec[n],hit=res.numHits[n]||0;
+    return{num:parseInt(n),rec:rec,hit:hit,rate:rec>=3?Math.round(hit/rec*100):null};
+  }).filter(function(x){return x.rate!==null&&x.rate>=30;})
+    .sort(function(a,b){return b.rate-a.rate||b.hit-a.hit;}).slice(0,4);
+  var trapHtml=trapList.length
+    ?'<div style="margin-top:.16rem;font-size:.57rem"><span style="font-weight:800;color:#7c2d12">完整票陷阱號：</span>'
+      +trapList.map(function(x){var col=x.rate>=60?'#dc2626':x.rate>=40?'#c2410c':'#d97706';return '<span style="color:'+col+';font-weight:700">'+ns(x.num)+'('+x.rate+'%)</span>';}).join(' ')+'</div>'
+    :'';
+  var srcTotal=(res.srcHits.consensus||0)+(res.srcHits.coldFill||0)+(res.srcHits.missFill||0);
+  var srcHtml=srcTotal?'<div class="consensus-cause-row"><span>命中來源</span><span><strong>共識 '+Math.round((res.srcHits.consensus||0)/srcTotal*100)+'%</strong> / 冷補 '+Math.round((res.srcHits.coldFill||0)/srcTotal*100)+'% / 遺補 '+Math.round((res.srcHits.missFill||0)/srcTotal*100)+'%</span></div>':'';
+  var topOdd=topBucket(res.drawPatterns.odd);
+  var topColor=topBucket(res.drawPatterns.color);
+  var consecPct=res.drawPatterns.consec.Y+res.drawPatterns.consec.N>0?Math.round(res.drawPatterns.consec.Y/(res.drawPatterns.consec.Y+res.drawPatterns.consec.N)*100):0;
+  var casesHtml=res.failCases.slice(0,4).map(function(c){
+    var hitBalls=c.hitNums.map(function(n){return'<span class="ball-sm '+_clsBall(n)+'" style="width:.95rem;height:.95rem;font-size:.42rem">'+ns(n)+'</span>';}).join('');
+    var ticket=c.ticketNums.map(ns).join('/');
+    var info=c.hitInfo.map(function(h){return ns(h.num)+'：'+h.src+' 遺'+h.miss+' 熱'+Math.round(h.heat*10)/10+'% 危'+h.dp+'%';}).join('；');
+    return'<div class="consensus-case-line">'+c.date+' 中'+c.hitCount+'｜票 '+ticket+'｜'+hitBalls+' '+info+'</div>';
+  }).join('');
+  el.innerHTML='<div>'
+    +'<div style="font-weight:800;font-size:.65rem;color:'+rateC+'">補滿5支五不中率 <span style="font-size:.8rem">'+ticketRate+'%</span>'
+    +'<span style="font-size:.56rem;font-weight:400;color:#64748b">（勝'+res.ticketWins+' / 敗'+res.ticketLosses+' / 可下注'+res.total+'期）</span></div>'
+    +'<div style="font-size:.56rem;color:#475569;margin-top:.06rem">共識號本身避開率 '+consRate+'%（只看交集號，不等於完整票勝率）；落點：中1 '+res.hits1+' / 中2 '+res.hits2+' / 中3+ '+res.hits3p+'；最大五不中連敗 '+res.maxMissLossStreak+'</div>'
+    +trapHtml
+    +'<div class="consensus-cause-grid">'
+    +'<div class="consensus-cause-card"><div class="consensus-cause-card-title">完整票失敗來源</div>'
+    +srcHtml
+    +'<div class="consensus-cause-row"><span>遺漏狀態最多</span><span><strong>'+topBucket(res.statBuckets.miss)+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>熱力狀態最多</span><span><strong>'+topBucket(res.statBuckets.heat)+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>危險度最多</span><span><strong>'+topBucket(res.statBuckets.danger)+'</strong></span></div>'
+    +'</div>'
+    +'<div class="consensus-cause-card"><div class="consensus-cause-card-title">失敗開獎分佈特徵</div>'
+    +'<div class="consensus-cause-row"><span>最常見單雙</span><span><strong>'+topOdd+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>最常見色球</span><span><strong>'+topColor+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>含連號比例</span><span><strong>'+consecPct+'%</strong></span></div>'
+    +'</div></div>'
+    +(casesHtml?'<details style="margin-top:.14rem"><summary style="font-size:.57rem;color:#15803d;cursor:pointer;font-weight:700;list-style:none">▶ 查看最近完整票失敗案例</summary><div style="margin-top:.1rem">'+casesHtml+'</div></details>':'')
+    +'</div>';
+}
+
+function renderConsensusBtPanel(key){
+  var el=document.getElementById('pk-consensus-rec-'+key);
+  if(!el)return;
+  var coldRec=computeColdFilterRec(key)||[];
+  var missRec=computeMissRankFilterRec(key)||[];
+  var built=_buildConsensusTicket(coldRec,missRec);
+  function ns(n){return(n<10?'0':'')+n;}
+  function ball(n,label,sz){
+    sz=sz||'1.3rem';
+    return '<span title="'+label+'" class="ball-sm '+_clsBall(n)+'" style="width:'+sz+';height:'+sz+';font-size:.52rem;cursor:default">'+ns(n)+'</span>';
+  }
+  var ballsHtml='';
+  if(built.consNums.length){
+    ballsHtml+='<div style="margin-bottom:.12rem"><span style="font-weight:800;color:#15803d;font-size:.58rem">共識號：</span>'
+      +built.consNums.map(function(n){return ball(n,'共識','1.55rem');}).join(' ')+'</div>';
+  }
+  if(built.ticketNums.length){
+    ballsHtml+='<div style="font-size:.56rem"><span style="font-weight:800;color:#14532d">補滿5支完整票：</span>'
+      +built.ticketNums.map(function(n){return ball(n,built.sourceMap[n]||'補位');}).join(' ')
+      +(built.ticketNums.length>=5?'<button class="arb-apply" style="margin-left:.3rem;background:#15803d" onclick="applyConsensusTicketToSel(\''+key+'\',['+built.ticketNums.join(',')+'])">帶入完整票</button>':'')
+      +'</div>';
+  }else{
+    ballsHtml='<span style="font-size:.57rem;color:#64748b">目前兩套策略沒有可補滿 5 支的共識票</span>';
+  }
+  var activePeriods=_consBtPeriod[key]||30;
+  var tabsHtml='<div class="consensus-bt-tabs" id="pk-cons-bt-'+key+'">'
+    +'<span style="font-size:.55rem;color:#15803d;font-weight:700;margin-right:.1rem">📊 共識回測：</span>'
+    +'<button class="consensus-bt-tab'+(activePeriods===30?' active':'')+'" data-p="30" onclick="switchConsBt(\''+key+'\',30)">近30期</button>'
+    +'<button class="consensus-bt-tab'+(activePeriods===50?' active':'')+'" data-p="50" onclick="switchConsBt(\''+key+'\',50)">近50期</button>'
+    +'<button class="consensus-bt-tab'+(activePeriods===100?' active':'')+'" data-p="100" onclick="switchConsBt(\''+key+'\',100)">近100期</button>'
+    +'</div><div id="pk-cons-bt-res-'+key+'"></div>';
+  el.innerHTML='<div class="consensus-bt-panel">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem;gap:.4rem;flex-wrap:wrap">'
+    +'<span style="font-size:.62rem;font-weight:800;color:#14532d">🤝 雙策略共識推薦</span>'
+    +'<span style="font-size:.52rem;color:#475569">共識避開率 + 補滿5支真實勝率</span>'
+    +'</div>'
+    +ballsHtml
+    +'<div style="margin-top:.08rem;font-size:.53rem;color:#475569">共識號不足 5 支時，依冷門/遺漏排名補滿後才計算真正五不中率。</div>'
+    +'<div style="margin-top:.14rem">'+tabsHtml+'</div>'
+    +'</div>';
+  renderConsensusBacktest(key,activePeriods);
+}
+
+function applyConsensusTicketToSel(key,nums){
+  _pickerSel[key]=nums.slice(0,5);
+  _pickerDraft[key]=[];
+  _pickerStrategySource[key]='consensus_full_ticket';
+  _refreshPickerUI(key);
+  renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
+}
+
+function _arbSettings(key){
+  var base={missPayout:1,onePayout:1,minSamples:25,minEv:0};
+  var src={};
+  try{src=JSON.parse(localStorage.getItem('arbSettings_'+key)||'{}')||{};}catch(e){src={};}
+  Object.keys(src).forEach(function(k){base[k]=src[k];});
+  base.missPayout=Math.max(0.1,Number(base.missPayout)||1);
+  base.onePayout=Math.max(0.1,Number(base.onePayout)||1);
+  base.minSamples=Math.max(10,Math.min(100,parseInt(base.minSamples)||25));
+  base.minEv=Number(base.minEv)||0;
+  return base;
+}
+
+function applyArbSettings(key){
+  function v(id,def){var el=document.getElementById(id+'-'+key);return el?el.value:def;}
+  var s={
+    missPayout:Number(v('arb-miss-pay',1))||1,
+    onePayout:Number(v('arb-one-pay',1))||1,
+    minSamples:parseInt(v('arb-min-samples',25))||25,
+    minEv:0
+  };
+  try{localStorage.setItem('arbSettings_'+key,JSON.stringify(s));}catch(e){}
+  _clearPrefixCache(_arbCache,key);
+  renderStrategyArbPanel(key);
+}
+
+function switchArbPeriod(key,periods){
+  _arbPeriod[key]=periods;
+  renderStrategyArbPanel(key);
+}
+
+function _getAutoParamResult(key,periods,mode){
+  mode=mode||'miss0';
+  var cacheKey=key+'_'+periods+'_'+mode;
+  var res=_autoParamCache[cacheKey];
+  if(!res){res=_autoParamScan(key,periods,mode);if(res)_autoParamCache[cacheKey]=res;}
+  return res;
+}
+
+function _sourceResultFor(key,source,periods,mode){
+  if(source==='cold')return runColdFilterBacktest(key,periods);
+  if(source==='miss')return runMissRankBacktest(key,periods);
+  if(source==='consensus')return runConsensusBacktest(key,periods);
+  if(source==='adaptive')return _getAutoParamResult(key,periods,mode);
+  return null;
+}
+
+function _currentTicketForSource(key,source,res){
+  if(source==='cold')return _recNums(computeColdFilterRec(key)).slice(0,5);
+  if(source==='miss')return _recNums(computeMissRankFilterRec(key)).slice(0,5);
+  if(source==='consensus'){
+    return _buildConsensusTicket(computeColdFilterRec(key)||[],computeMissRankFilterRec(key)||[]).ticketNums.slice(0,5);
+  }
+  if(source==='adaptive'){
+    var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+    var params=res&&res.params;
+    if(!dh.length||!params)return [];
+    return _recNums(_computeColdRecSimWithParams(dh,0,params)).slice(0,5);
+  }
+  return [];
+}
+
+function _arbMetricFromResult(res,mode,settings){
+  if(!res||!res.total)return null;
+  var wins=mode==='miss0'?res.wins:res.hits1;
+  var rate=_ratePct(wins,res.total);
+  var base=mode==='miss0'?48.3:40.3;
+  var payout=mode==='miss0'?settings.missPayout:settings.onePayout;
+  return {
+    total:res.total,wins:wins,rate:rate,base:base,lift:Math.round((rate-base)*10)/10,
+    ev:_evScore(rate,payout),
+    maxLoss:mode==='miss0'?(res.maxMissLossStreak||0):(res.maxOneLossStreak||0)
+  };
+}
+
+function _arbBuildCandidate(key,source,label,mode,periods,settings){
+  var horizons=[30,50,100],metrics={},valid=[],positive=0;
+  horizons.forEach(function(p){
+    var r=_sourceResultFor(key,source,p,mode);
+    var m=_arbMetricFromResult(r,mode,settings);
+    if(m){
+      metrics[p]=m;
+      if(m.total>=settings.minSamples)valid.push(m);
+      if(m.total>=settings.minSamples&&m.ev>settings.minEv)positive++;
+    }
+  });
+  var active=metrics[periods]||metrics[50]||metrics[30]||metrics[100];
+  if(!active)return null;
+  var activeRes=_sourceResultFor(key,source,periods,mode)||_sourceResultFor(key,source,50,mode)||_sourceResultFor(key,source,30,mode);
+  var ticket=_currentTicketForSource(key,source,activeRes);
+  var avgEv=valid.length?valid.reduce(function(a,b){return a+b.ev;},0)/valid.length:active.ev;
+  var stable=active.total>=settings.minSamples&&active.ev>settings.minEv&&positive>=Math.min(2,valid.length||1)&&ticket.length>=5;
+  return {
+    source:source,label:label,mode:mode,
+    modeLabel:mode==='miss0'?'五選不中':'五選中一',
+    ticket:ticket,metrics:metrics,active:active,avgEv:avgEv,positive:positive,stable:stable
+  };
+}
+
+function _arbCandidates(key,periods,settings){
+  var sources=[
+    ['cold','冷門過濾'],
+    ['miss','遺漏排行'],
+    ['consensus','共識補滿5支'],
+    ['adaptive','自適應走前']
+  ];
+  var out=[];
+  sources.forEach(function(s){
+    ['miss0','one1'].forEach(function(mode){
+      var c=_arbBuildCandidate(key,s[0],s[1],mode,periods,settings);
+      if(c)out.push(c);
+    });
+  });
+  out.sort(function(a,b){return b.avgEv-a.avgEv||b.active.rate-a.active.rate;});
+  return out;
+}
+
+function _arbRatesText(c){
+  return [30,50,100].map(function(p){
+    var m=c.metrics[p];
+    return m?p+'期 '+m.rate+'%':'';
+  }).filter(Boolean).join(' / ');
+}
+
+function applyArbTicketToSel(key,nums,mode,source){
+  _pickerSel[key]=nums.slice(0,5);
+  _pickerDraft[key]=[];
+  _pickerStrategySource[key]='arb_'+mode+'_'+source;
+  _refreshPickerUI(key);
+  renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
+}
+
+function renderStrategyArbPanel(key){
+  var el=document.getElementById('pk-arb-rec-'+key);
+  if(!el)return;
+  var settings=_arbSettings(key);
+  var periods=_arbPeriod[key]||50;
+  var candidates=_arbCandidates(key,periods,settings);
+  var playable=candidates.filter(function(c){return c.stable;});
+  var best=playable[0]||null;
+  var top=candidates[0]||null;
+  var decision=best||top;
+  function ns(n){return(n<10?'0':'')+n;}
+  function evText(ev){return (ev>=0?'+':'')+(Math.round(ev*1000)/10)+'%';}
+  var badge=best
+    ?'<span class="arb-badge arb-badge-go">建議：'+best.modeLabel+'｜'+best.label+'</span>'
+    :'<span class="arb-badge arb-badge-stop">建議：不下注或只觀察</span>';
+  var ticketHtml='';
+  if(decision&&decision.ticket.length>=5){
+    ticketHtml='<div class="arb-ticket">'+decision.ticket.map(function(n){
+      return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.55rem;height:1.55rem;font-size:.58rem">'+ns(n)+'</span>';
+    }).join('')+'<button class="arb-apply" onclick="applyArbTicketToSel(\''+key+'\',['+decision.ticket.join(',')+'],\''+decision.mode+'\',\''+decision.source+'\')">帶入選號盤</button></div>';
+  }
+  var detail=decision
+    ?'<div class="arb-row"><span>主指標</span><strong>'+periods+'期 '+decision.active.rate+'%｜EV '+evText(decision.active.ev)+'｜提升 '+decision.active.lift+'%</strong></div>'
+      +'<div class="arb-row"><span>風險</span><strong>樣本 '+decision.active.total+'｜最大失敗連續 '+decision.active.maxLoss+' 期｜正EV視窗 '+decision.positive+'/3</strong></div>'
+      +'<div class="arb-row"><span>30/50/100</span><strong>'+_arbRatesText(decision)+'</strong></div>'
+    :'<div class="arb-row"><span>狀態</span><strong>資料不足</strong></div>';
+  var rows=candidates.slice(0,6).map(function(c){
+    var color=c.stable?'#166534':(c.active.ev>0?'#d97706':'#64748b');
+    return '<div class="arb-row"><span>'+c.label+'｜'+c.modeLabel+'</span><strong style="color:'+color+'">'+c.active.rate+'% / EV '+evText(c.active.ev)+'</strong></div>';
+  }).join('');
+  if(!rows)rows='<div class="arb-row"><span>候選策略</span><strong>資料不足</strong></div>';
+  el.innerHTML='<div class="arb-panel">'
+    +'<div class="arb-head"><span class="arb-title">🧭 策略仲裁器</span>'+badge+'</div>'
+    +'<div class="arb-controls">'
+    +'<label class="arb-field">五不中賠率<input id="arb-miss-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.missPayout+'"></label>'
+    +'<label class="arb-field">五選中一賠率<input id="arb-one-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.onePayout+'"></label>'
+    +'<label class="arb-field">最低樣本<input id="arb-min-samples-'+key+'" type="number" step="1" min="10" max="100" value="'+settings.minSamples+'"></label>'
+    +'<button class="arb-apply" onclick="applyArbSettings(\''+key+'\')">套用比較基準</button>'
+    +'</div>'
+    +'<div class="arb-tabs">'
+    +'<span style="font-size:.55rem;color:#4338ca;font-weight:800;margin-right:.1rem">比較視窗：</span>'
+    +'<button class="arb-tab'+(periods===30?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',30)">近30期</button>'
+    +'<button class="arb-tab'+(periods===50?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',50)">近50期</button>'
+    +'<button class="arb-tab'+(periods===100?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',100)">近100期</button>'
+    +'</div>'
+    +ticketHtml
+    +'<div class="arb-grid"><div class="arb-card"><div class="arb-card-title">決策理由</div>'+detail+'</div>'
+    +'<div class="arb-card"><div class="arb-card-title">候選排序</div>'+rows+'</div></div>'
+    +'<div class="arb-note">判斷基準：五不中隨機約 48.3%，五選中一約 40.3%；此處用賠率換算 EV，且至少兩個回測視窗為正 EV 才列為可下注。若未達標，工具會建議不下注或只觀察。</div>'
+    +'</div>';
+}
+
 function renderColdFilterPanel(key){
   var el=document.getElementById('pk-cold-rec-'+key);
   if(!el)return;
@@ -5950,6 +6573,17 @@ function _settleBetLogTargets(key,log,drawList){
   }
   return changed;
 }
+function _betEntryMode(entry){
+  var s=(entry&&entry.strategySource||'').toLowerCase();
+  return (s.indexOf('one1')!==-1||s.indexOf('one_hit')!==-1)?'one1':'miss0';
+}
+function _betEntryIsWin(entry,hitCnt){
+  if(hitCnt===null||hitCnt===undefined||hitCnt<0)return false;
+  return _betEntryMode(entry)==='one1'?hitCnt===1:hitCnt===0;
+}
+function _betEntryModeLabel(entry){
+  return _betEntryMode(entry)==='one1'?'五選中一':'五選不中';
+}
 function _setBetLogSyncStatus(key,msg,kind){
   var logEl=document.getElementById('bet-log-'+key);
   var el=document.getElementById('bet-sync-status-'+key);
@@ -5978,7 +6612,7 @@ function _buildBetLogSyncEntries(key,log,drawList){
     var status='pending';
     if(matchDraw){
       hitCnt=(entry.nums||[]).filter(function(n){return matchDraw.numbers.indexOf(n)!==-1;}).length;
-      status=hitCnt===0?'win':'loss';
+      status=_betEntryIsWin(entry,hitCnt)?'win':'loss';
     }
     return {
       nums:(entry.nums||[]).slice(),
@@ -6164,10 +6798,12 @@ function renderBetLog(key){
       return '<span class="ball-sm '+_clsBall(n)+'">'+s+'</span>';
     }).join('');
     var badgeHtml='';
+    var isWin=bestHit>=0&&_betEntryIsWin(entry,bestHit);
+    var modeLabel=_betEntryModeLabel(entry);
     if(bestHit<0){
       badgeHtml='<span class="bet-hit-badge" style="background:#f1f5f9;color:#94a3b8">等待開獎</span>';
-    }else if(bestHit===0){
-      badgeHtml='<span class="bet-hit-badge" style="background:#dcfce7;color:#166534;font-weight:800">✓ 勝（0中）</span>';
+    }else if(isWin){
+      badgeHtml='<span class="bet-hit-badge" style="background:#dcfce7;color:#166534;font-weight:800">✓ 勝（'+modeLabel+'｜'+bestHit+'中）</span>';
     }else if(bestHit>=4){
       badgeHtml='<span class="bet-hit-badge" style="background:#fee2e2;color:#991b1b">敗 '+bestHit+'中 ★</span>';
     }else if(bestHit>=3){
@@ -6175,7 +6811,7 @@ function renderBetLog(key){
     }else{
       badgeHtml='<span class="bet-hit-badge" style="background:#fff7ed;color:#c2410c">敗 '+bestHit+'中</span>';
     }
-    var wrapCls=(bestHit===0)?'bet-entry-wrap bet-hit-wrap':'bet-entry-wrap';
+    var wrapCls=isWin?'bet-entry-wrap bet-hit-wrap':'bet-entry-wrap';
     var oeTags='';
     if(entry.oe){
       oeTags+='<span class="anno-tag-oe" style="font-size:.63rem;padding:.1rem .38rem">'
@@ -6246,8 +6882,8 @@ function renderBetLog(key){
   function _isManual(it){var s=it.entry.strategySource||'';return s===''||s==='手動';}
   var filtPending=pendingItems,filtSettled=settledItems;
   if(filter==='pending'){filtSettled=[];}
-  else if(filter==='win'){filtPending=[];filtSettled=filtSettled.filter(function(it){return it.bestHit===0;});}
-  else if(filter==='loss'){filtPending=[];filtSettled=filtSettled.filter(function(it){return it.bestHit>0;});}
+  else if(filter==='win'){filtPending=[];filtSettled=filtSettled.filter(function(it){return _betEntryIsWin(it.entry,it.bestHit);});}
+  else if(filter==='loss'){filtPending=[];filtSettled=filtSettled.filter(function(it){return !_betEntryIsWin(it.entry,it.bestHit);});}
   else if(filter==='manual'){filtPending=filtPending.filter(_isManual);filtSettled=filtSettled.filter(_isManual);}
   else if(filter==='conservative'){filtPending=filtPending.filter(function(it){return _matchStrat(it,'保守');});filtSettled=filtSettled.filter(function(it){return _matchStrat(it,'保守');});}
   else if(filter==='balanced'){filtPending=filtPending.filter(function(it){return _matchStrat(it,'均衡');});filtSettled=filtSettled.filter(function(it){return _matchStrat(it,'均衡');});}
@@ -6256,7 +6892,7 @@ function renderBetLog(key){
   // Stats count only filtered settled
   var wins=0,losses=0;
   filtSettled.forEach(function(it){
-    if(it.bestHit===0)wins++;else losses++;
+    if(_betEntryIsWin(it.entry,it.bestHit))wins++;else losses++;
   });
 
   // ── Section label helper ──
@@ -6320,7 +6956,7 @@ function renderWinRateTrend(key,log,drawData){
     var found=_findDrawForEntry(key,entry,drawData);
     if(!found.draw)continue;
     var hits=entry.nums.filter(function(n){return found.draw.numbers.indexOf(n)!==-1;}).length;
-    settled.push(hits===0?1:0);
+    settled.push(_betEntryIsWin(entry,hits)?1:0);
   }
 
   if(settled.length===0){el.innerHTML='';return;}
@@ -6758,7 +7394,7 @@ function renderPersonalWinRate(key){
     if(found.draw){
       settled++;
       var hits=entry.nums.filter(function(n){return found.draw.numbers.indexOf(n)!==-1;}).length;
-      if(hits===0)wins++;
+      if(_betEntryIsWin(entry,hits))wins++;
     }
   });
   if(settled===0){el.innerHTML='';return;}
@@ -7050,7 +7686,7 @@ function exportBetLogCSV(key){
     var result='等待開獎',hitCnt='';
     if(matchDraw){
       var hits=entry.nums.filter(function(n){return matchDraw.numbers.indexOf(n)!==-1;}).length;
-      result=hits===0?'勝':'敗';
+      result=_betEntryIsWin(entry,hits)?'勝':'敗';
       hitCnt=String(hits);
     }
     rows.push([ts,baseTs,nums,oeStr,colStr,stratSrc,note,result,hitCnt].join(','));
@@ -7267,16 +7903,39 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         except Exception as e:
             print(f"[WARN] write report version failed: {e}")
 
+    def _html_has_required_features(html: str) -> bool:
+        return (
+            "pk-arb-rec" in html
+            and "function renderStrategyArbPanel" in html
+            and "function _buildConsensusTicket" in html
+        )
+
+    def _output_has_required_features() -> bool:
+        if not output_path.exists():
+            return False
+        try:
+            html = output_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return False
+        return _html_has_required_features(html)
+
     def _report_needs_rebuild() -> bool:
         if not output_path.exists():
             return True
         try:
-            return version_path.read_text(encoding="utf-8").strip() != build_id
+            if version_path.read_text(encoding="utf-8").strip() != build_id:
+                return True
         except Exception:
             return True
+        return not _output_has_required_features()
 
     def _rebuild_report() -> None:
-        analyzer.run(output_path, server_mode=True)
+        results = analyzer.run(output_path, server_mode=True)
+        valid = sum(1 for v in results.values() if v is not None)
+        if valid == 0:
+            raise RuntimeError("no valid lottery data, report was not generated")
+        if not _output_has_required_features():
+            raise RuntimeError("generated report is missing required v13.2 UI features")
         _mark_report_current()
 
     if run_init:
@@ -7378,6 +8037,13 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
     @app.route("/api/build", methods=["GET"])
     def api_build():
         """部署後快速確認：程式版本與報告 HTML 是否已重建到新版。"""
+        build_error = ""
+        try:
+            if _report_needs_rebuild():
+                _rebuild_report()
+        except Exception as e:
+            build_error = str(e)
+
         version_value = ""
         try:
             version_value = version_path.read_text(encoding="utf-8").strip()
@@ -7407,6 +8073,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
             "build": build_id[:16],
             "report_exists": output_path.exists(),
             "report_current": report_current,
+            "build_error": build_error,
             "version": version_value[:16],
             "source_has_new_cold_rule": (
                 "function _coldFilterRule" in source
@@ -7414,15 +8081,19 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 and "function resetColdRuleSettings" in source
                 and "function renderMissRankFilterPanel" in source
                 and "function openMissRankCauseModal" in source
+                and "function renderStrategyArbPanel" in source
+                and "function _buildConsensusTicket" in source
             ),
             "html_has_new_cold_rule": (
-                "策略門檻" in html
+                _html_has_required_features(html)
+                and "策略門檻" in html
                 and "手動調整篩選條件" in html
                 and "套用條件" in html
                 and "恢復預設" in html
                 and "遺漏排行篩選推薦" in html
                 and "手動調整遺漏排行條件" in html
                 and "openMissRankCauseModal" in html
+                and "策略仲裁器" in html
             ),
             "html_has_old_top2_rule": (
                 "冷門前2" in html or "前2代表" in html or "冷門Top2" in html
