@@ -1694,7 +1694,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#1e293
 .fp-header-btn:hover{background:rgba(255,255,255,.22)}
 
 /* CSS variables for sidebar width */
-:root{--pw:360px;--pw-wide:440px}
+:root{--pw:clamp(380px,32%,520px);--pw-wide:clamp(440px,38%,600px)}
 body.sidebar-wide{--pw:var(--pw-wide)}
 
 /* Main layout — flex with sidebar */
@@ -2004,31 +2004,7 @@ tr.stripe td{background:#f8fafc}
 .consensus-cause-row:last-child{border-bottom:none}
 .consensus-case-line{font-size:.56rem;color:#475569;line-height:1.55;padding:.04rem 0;border-bottom:1px solid #f0fdf4}
 .consensus-sug{margin-top:.2rem;font-size:.58rem;color:#14532d;background:#f0fdf4;border:1px solid #86efac;border-radius:.35rem;padding:.2rem .28rem;line-height:1.65}
-.arb-panel{background:linear-gradient(135deg,#eef2ff,#f8fafc);border:1.5px solid #818cf8;border-radius:.7rem;padding:.74rem .82rem;margin-bottom:.45rem;font-size:.92rem}
-.arb-head{display:flex;justify-content:space-between;align-items:center;gap:.45rem;margin-bottom:.28rem;flex-wrap:wrap}
-.arb-title{font-size:1rem;font-weight:900;color:#312e81;line-height:1.35}
-.arb-badge{font-size:.84rem;font-weight:900;border-radius:.4rem;padding:.22rem .52rem;white-space:normal;line-height:1.35}
-.arb-badge-go{background:#dcfce7;color:#166534;border:1px solid #86efac}
-.arb-badge-stop{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
-.arb-help{background:#fff;border:1px solid #c7d2fe;border-radius:.5rem;padding:.48rem .55rem;margin:.25rem 0 .42rem;color:#334155;font-size:.86rem;line-height:1.65}
-.arb-help strong{color:#312e81}
-.arb-controls{display:flex;gap:.42rem;align-items:end;flex-wrap:wrap;margin:.22rem 0 .35rem}
-.arb-field{display:flex;flex-direction:column;gap:.12rem;font-size:.82rem;color:#4338ca;font-weight:800;line-height:1.35}
-.arb-field input{height:2.15rem;width:5rem;border:1px solid #c7d2fe;border-radius:.38rem;background:#fff;color:#0f172a;font-size:.95rem;padding:0 .4rem}
-.arb-tabs{display:flex;gap:.22rem;align-items:center;margin:.2rem 0 .3rem;flex-wrap:wrap}
-.arb-tab{font-size:.82rem;padding:.16rem .42rem;border:1px solid #a5b4fc;border-radius:.34rem;background:#fff;color:#4338ca;cursor:pointer;font-weight:800;line-height:1.5}
-.arb-tab.active{background:#4338ca;color:#fff;border-color:#4338ca}
-.arb-grid{display:grid;grid-template-columns:1fr;gap:.42rem;margin-top:.28rem}
-.arb-card{background:rgba(255,255,255,.85);border:1px solid #c7d2fe;border-radius:.5rem;padding:.52rem .6rem}
-.arb-card-title{font-size:.94rem;font-weight:900;color:#4338ca;margin-bottom:.24rem;line-height:1.35}
-.arb-row{display:block;font-size:.86rem;color:#334155;border-bottom:1px solid rgba(199,210,254,.55);padding:.2rem 0;line-height:1.58}
-.arb-row span{display:block;color:#64748b;font-weight:800;margin-bottom:.03rem}
-.arb-row strong{display:block;color:#0f172a;font-weight:900}
-.arb-row:last-child{border-bottom:none}
-.arb-ticket{display:flex;gap:.26rem;flex-wrap:wrap;align-items:center;margin:.22rem 0}
-.arb-ticket-label{width:100%;font-size:.86rem;font-weight:900;color:#312e81;margin-bottom:.02rem}
 .arb-apply{font-size:.82rem;padding:.2rem .52rem;border:none;border-radius:.36rem;background:#4338ca;color:#fff;cursor:pointer;font-weight:900;white-space:nowrap;line-height:1.45}
-.arb-note{font-size:.82rem;color:#64748b;line-height:1.65;margin-top:.24rem}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -2960,8 +2936,6 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
                 '</div>'
             )
         return (
-            # ── Strategy arbitrator panel
-            '<div id="pk-arb-rec-' + key + '"></div>'
             # ── Cold-filter recommendation panel (v11)
             '<div id="pk-cold-rec-' + key + '"></div>'
             # ── Miss-rank recommendation panel
@@ -3473,7 +3447,6 @@ function switchTab(key){
   _renderMissDist(key);
   renderBetLog(key);
   _restoreLock(key);
-  renderStrategyArbPanel(key);
   renderColdFilterPanel(key);
   renderMissRankFilterPanel(key);
   renderConsensusBtPanel(key);
@@ -3624,8 +3597,9 @@ function _btStore(key,d){
   if(d.rev_oe_data){      window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
   if(d.draw_history_data){window._DRAW_HISTORY=window._DRAW_HISTORY||{};    window._DRAW_HISTORY[key]=d.draw_history_data;
     // Invalidate backtest cache for this key when draw history changes
-    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _consBtCache[key+'_'+p];delete _arbCache[key+'_'+p];});
-    _clearDecisionCaches(key);
+    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _consBtCache[key+'_'+p];});
+    if(typeof _autoParamCache!=='undefined')Object.keys(_autoParamCache).forEach(function(k){if(k.indexOf(key)===0)delete _autoParamCache[k];});
+    if(typeof _missParamCache!=='undefined')Object.keys(_missParamCache).forEach(function(k){if(k.indexOf(key)===0)delete _missParamCache[k];});
     _missRankClearBtCache(key);
   }
 }
@@ -3649,7 +3623,6 @@ function updateSelectionBoard(key){
   _renderMissDist(key);          // 遺漏分佈直方圖
   renderBetLog(key);             // 投注紀錄命中對比
   renderOEColorGuide(key);       // 今日配比推薦（v10.2）
-  renderStrategyArbPanel(key);   // 策略仲裁器
   renderColdFilterPanel(key);    // 冷門過濾智能推薦（v11）
   renderMissRankFilterPanel(key); // 遺漏排行篩選推薦
   renderConsensusBtPanel(key);   // 雙策略共識獨立面板（v13.1）
@@ -3908,20 +3881,13 @@ var _coldBtPeriod={};
 var _missRankBtCache={};
 var _missRankBtPeriod={};
 var _consBtPeriod={};
-var _arbCache={};
-var _arbPeriod={};
+var _missParamCache={};
 
 function _clearPrefixCache(obj,key){
   if(!obj)return;
   Object.keys(obj).forEach(function(k){
     if(k.indexOf(key+'_')===0)delete obj[k];
   });
-}
-
-function _clearDecisionCaches(key){
-  if(typeof _consBtCache!=='undefined')_clearPrefixCache(_consBtCache,key);
-  if(typeof _autoParamCache!=='undefined')_clearPrefixCache(_autoParamCache,key);
-  _clearPrefixCache(_arbCache,key);
 }
 
 function _coldFilterRule(key){
@@ -3985,7 +3951,7 @@ function _coldClearBtCache(key){
   Object.keys(_coldBtCache).forEach(function(k){
     if(k.indexOf(key+'_')===0)delete _coldBtCache[k];
   });
-  _clearDecisionCaches(key);
+  _clearPrefixCache(_autoParamCache,key);_clearPrefixCache(_missParamCache,key);
 }
 
 function _coldStatValue(n,metric,fns){
@@ -4151,7 +4117,7 @@ function _missRankClearBtCache(key){
   Object.keys(_missRankBtCache).forEach(function(k){
     if(k.indexOf(key+'_')===0)delete _missRankBtCache[k];
   });
-  _clearDecisionCaches(key);
+  _clearPrefixCache(_autoParamCache,key);_clearPrefixCache(_missParamCache,key);
 }
 
 function _missRankRuleSummary(rule){
@@ -4672,6 +4638,14 @@ function renderMissRankFilterPanel(key){
     +'<button class="cold-bt-tab miss-rank-bt-tab'+(activePeriods===50?' active':'')+'" data-p="50" onclick="switchMissRankBt(\''+key+'\',50)">近50期</button>'
     +'<button class="cold-bt-tab miss-rank-bt-tab'+(activePeriods===100?' active':'')+'" data-p="100" onclick="switchMissRankBt(\''+key+'\',100)">近100期</button>'
     +'</div><div id="pk-miss-rank-bt-result-'+key+'"></div></div>'
+    +'<div class="param-scan-box" style="border-color:#fed7aa;background:linear-gradient(135deg,#fff7ed,#ffedd5)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center">'
+    +'<span style="font-size:.57rem;font-weight:800;color:#9a3412">⚙️ 遺漏排行自適應參數建議</span>'
+    +'<button onclick="renderMissRankAutoParamSuggestion(\''+key+'\')" '
+    +'style="font-size:.55rem;padding:.1rem .26rem;border:none;border-radius:.25rem;background:#c2410c;color:#fff;cursor:pointer;font-weight:700">掃描最優參數</button>'
+    +'</div>'
+    +'<div id="pk-miss-param-scan-'+key+'" style="margin-top:.1rem"></div>'
+    +'</div>'
     +'</div>';
   renderMissRankBacktest(key,activePeriods);
 }
@@ -5707,11 +5681,80 @@ function renderAutoParamSuggestion(key){
   },0);
 }
 
-/* ④ 五選中一推薦模式：主力號（準到期）+ 護盾號（超冷）*/
-/* ══ 雙策略共識面板獨立回測引擎（v13.1）══
-   走前驗證：每期預測只用 histStart 之後（即更老）的歷史資料，
-   絕不讀取 dh[i]（待預測期）之前的 dh[i-1]...dh[0]。
-   ══════════════════════════════════════════════════════════════ */
+/* ── 遺漏排行自適應參數掃描（走前驗證，不偷看未來號碼）──
+   掃描 maxRecentFreq=[2,3,4,5] × minGroupSize=[1,2,3] 共12組
+   每期預測只用 histStart 之後的歷史資料 ── */
+function _computeMissRankRecSimWithParams(dh,histStart,params){
+  if(histStart>=dh.length)return null;
+  var rule={
+    label:'scan',
+    windows:['100','50','30','10'],
+    maxRecentFreq:params.maxRecentFreq!==undefined?params.maxRecentFreq:3,
+    minGroupSize:params.minGroupSize!==undefined?params.minGroupSize:2,
+    maxDanger:null,
+    excludeLatestInRank:true,
+    excludeNeighborInRank:true,
+    fallbackWithinGroup:true,
+    sort:['heat','danger','freq','miss']
+  };
+  var sim=_missRankBuildSimData(dh,histStart,rule);
+  return _missRankSelect(rule,sim.latestNums,sim.rankData,sim.nhd,sim.hpd);
+}
+function _autoParamScanMissRank(key,periods){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var maxTrials=Math.min(periods,dh.length-2);
+  if(maxTrials<10)return null;
+  var grid=[];
+  [2,3,4,5].forEach(function(mrf){[1,2,3].forEach(function(mgs){grid.push({maxRecentFreq:mrf,minGroupSize:mgs});});});
+  var best=null,bestRate=-1;
+  grid.forEach(function(params){
+    var wins=0,total=0;
+    for(var i=0;i<maxTrials;i++){
+      var simRec=_computeMissRankRecSimWithParams(dh,i+1,params);
+      if(!simRec||!simRec.length)continue;
+      total++;
+      var hit=_hitCountNums(_recNums(simRec),dh[i].numbers);
+      if(hit===0)wins++;
+    }
+    if(total<10)return;
+    var rate=wins/total;
+    if(rate>bestRate){bestRate=rate;best={params:params,wins:wins,total:total,rate:rate};}
+  });
+  return best;
+}
+function applyMissRankParamSuggestion(key,mrf,mgs){
+  var rule=_missRankRule(key);
+  rule.maxRecentFreq=mrf;
+  rule.minGroupSize=mgs;
+  try{localStorage.setItem('missRankRule_'+key,JSON.stringify(rule));}catch(e){}
+  _missRankClearBtCache(key);
+  _clearPrefixCache(_missParamCache,key);
+  renderMissRankFilterPanel(key);
+}
+function renderMissRankAutoParamSuggestion(key){
+  var el=document.getElementById('pk-miss-param-scan-'+key);
+  if(!el)return;
+  el.innerHTML='<span style="color:#78350f;font-size:.57rem">掃描中（12組參數×近50期走前驗證）…</span>';
+  setTimeout(function(){
+    var cacheKey=key+'_50';
+    var res=_missParamCache[cacheKey];
+    if(!res){res=_autoParamScanMissRank(key,50);if(res)_missParamCache[cacheKey]=res;}
+    if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法掃描</span>';return;}
+    var rule=_missRankRule(key);
+    var rate=Math.round(res.rate*1000)/10;
+    var rateC=rate>=55?'#16a34a':rate>=48?'#d97706':'#dc2626';
+    var changed=(res.params.maxRecentFreq!==rule.maxRecentFreq||res.params.minGroupSize!==rule.minGroupSize);
+    el.innerHTML='<div class="param-scan-result">'
+      +'<div style="font-weight:800;color:'+rateC+'">最優建議：熱門頻次上限 ≤<strong>'+res.params.maxRecentFreq+'</strong> 次｜群組最小支數 ≥<strong>'+res.params.minGroupSize+'</strong> → 勝率 '+rate+'%（'+res.wins+'/'+res.total+'期）</div>'
+      +'<div style="color:#78350f;margin-top:.07rem;font-size:.54rem">'+(changed?'目前設定與最優不同':'目前設定已與最優相符')+'（走前驗證，每期預測僅用該期之前的歷史資料）</div>'
+      +(changed?'<button onclick="applyMissRankParamSuggestion(\''+key+'\','+res.params.maxRecentFreq+','+res.params.minGroupSize+')" '
+        +'style="margin-top:.15rem;font-size:.56rem;padding:.1rem .28rem;border:none;border-radius:.25rem;background:#c2410c;color:#fff;cursor:pointer;font-weight:700">套用建議參數</button>':'')
+      +'</div>';
+  },0);
+}
+
+/* ══ 雙策略共識面板回測引擎（走前驗證，絕不讀取未來號碼）══ */
 var _consBtCache={};
 function _buildConsensusTicket(coldRec,missRec){
   coldRec=coldRec||[];
@@ -5760,95 +5803,6 @@ function _buildConsensusTicket(coldRec,missRec){
   return {consNums:consensus,ticketNums:ticket,sourceMap:sourceMap,coldRank:coldRank,missRank:missRank};
 }
 
-function runConsensusBacktest(key,periods){
-  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
-  if(dh.length<periods+5)return null;
-  var wins=0,losses=0,total=0;
-  /* 號碼層級統計 */
-  var numHits={},numRec={};
-  /* 來源層級統計：coldOnly/missOnly/both 各推薦了多少次被命中 */
-  var srcHits={cold:0,miss:0};
-  /* 失敗時號碼當時的狀態統計（miss/heat/danger 分段） */
-  var statBuckets={miss:{},heat:{},danger:{}};
-  /* 失敗期的開獎分佈統計 */
-  var drawPatterns={odd:{},color:{},consec:{Y:0,N:0}};
-  /* 最近失敗案例（最多8筆） */
-  var failCases=[];
-  var mrRule=_missRankRule(key);
-  var maxTrials=Math.min(periods,dh.length-2);
-  function bucket3(v,thresholds,labels){
-    for(var bi=0;bi<thresholds.length;bi++){if(v<thresholds[bi])return labels[bi];}
-    return labels[labels.length-1];
-  }
-  for(var i=0;i<maxTrials;i++){
-    var histStart=i+1;
-    /* 走前模擬：兩套算法都只看 histStart 及更早的資料 */
-    var coldSim=_computeColdRecSim(key,dh,histStart);
-    var missSim=_computeMissRankRecSim(key,dh,histStart);
-    if(!coldSim||!coldSim.length||!missSim||!missSim.length)continue;
-    var coldSet={},missSet={};
-    for(var ri=0;ri<coldSim.length;ri++)coldSet[coldSim[ri].num]=ri+1;
-    for(var ri=0;ri<missSim.length;ri++)missSet[missSim[ri].num]=ri+1;
-    /* 取交集 = 共識號 */
-    var consNums=[];
-    for(var ri=0;ri<coldSim.length;ri++){if(missSet[coldSim[ri].num])consNums.push(coldSim[ri].num);}
-    if(!consNums.length)continue;
-    total++;
-    consNums.forEach(function(n){numRec[n]=(numRec[n]||0)+1;});
-    /* 對比 dh[i]（預測後的實際開獎，嚴格在 histStart 之後） */
-    var actual=dh[i].numbers;
-    var hitNums=consNums.filter(function(n){return actual.indexOf(n)!==-1;});
-    if(!hitNums.length){wins++;continue;}
-    losses++;
-    /* ── 失敗原因分析 ── */
-    var simData=_missRankBuildSimData(dh,histStart,mrRule);
-    hitNums.forEach(function(n){
-      numHits[n]=(numHits[n]||0)+1;
-      /* 哪套策略帶進來 */
-      var cr=coldSet[n]||99,mr=missSet[n]||99;
-      if(cr<mr)srcHits.cold++;else srcHits.miss++;
-      /* 當時狀態 */
-      var nd=simData.nhd[n]||{},hp=simData.hpd[n]||{};
-      var miss=nd.current_miss||0;
-      var heat=hp.next_hit_rate||0;
-      var dp=nd.danger_pct||0;
-      var mb=bucket3(miss,[5,10,20],['遺漏0~4','遺漏5~9','遺漏10~19','遺漏20+']);
-      var hb=bucket3(heat,[8,15,22],['熱力<8%','熱力8~14%','熱力15~21%','熱力22%+']);
-      var db=bucket3(dp,[40,70],['危<40%','危40~69%','危70%+']);
-      statBuckets.miss[mb]=(statBuckets.miss[mb]||0)+1;
-      statBuckets.heat[hb]=(statBuckets.heat[hb]||0)+1;
-      statBuckets.danger[db]=(statBuckets.danger[db]||0)+1;
-    });
-    /* 開獎分佈特徵 */
-    var sorted=actual.slice().sort(function(a,b){return a-b;});
-    var oddC=sorted.filter(function(n){return n%2===1;}).length;
-    var redC=sorted.filter(function(n){return n%3===1;}).length;
-    var blueC=sorted.filter(function(n){return n%3===2;}).length;
-    var hasC=false;for(var j=0;j<sorted.length-1;j++){if(sorted[j+1]-sorted[j]===1){hasC=true;break;}}
-    var ok=oddC+'單'+(5-oddC)+'雙';
-    var ck=redC+'紅'+blueC+'藍'+(5-redC-blueC)+'綠';
-    drawPatterns.odd[ok]=(drawPatterns.odd[ok]||0)+1;
-    drawPatterns.color[ck]=(drawPatterns.color[ck]||0)+1;
-    drawPatterns.consec[hasC?'Y':'N']++;
-    if(failCases.length<8){
-      failCases.push({
-        date:dh[i].date||'',
-        hitNums:hitNums,
-        actual:sorted,
-        odd:oddC,consec:hasC,
-        hitInfo:hitNums.map(function(n){
-          var nd=simData.nhd[n]||{},hp=simData.hpd[n]||{};
-          var cr=coldSet[n],mr=missSet[n];
-          return{num:n,
-            src:cr&&mr?'共識':(cr?'冷門第'+cr+'位':'遺漏第'+mr+'位'),
-            miss:nd.current_miss||0,heat:hp.next_hit_rate||0,dp:nd.danger_pct||0};
-        })
-      });
-    }
-  }
-  return{total:total,wins:wins,losses:losses,numHits:numHits,numRec:numRec,
-    srcHits:srcHits,statBuckets:statBuckets,drawPatterns:drawPatterns,failCases:failCases};
-}
 function switchConsBt(key,periods){
   _consBtPeriod[key]=periods;
   var wrap=document.getElementById('pk-cons-bt-'+key);
@@ -5932,60 +5886,6 @@ function renderConsensusBacktest(key,periods){
     +'</div>';
 }
 
-/* ── 雙策略共識獨立面板（v13.1） ── */
-function renderConsensusBtPanel(key){
-  var el=document.getElementById('pk-consensus-rec-'+key);
-  if(!el)return;
-  /* 計算目前共識號 */
-  var coldRec=computeColdFilterRec(key)||[];
-  var missRec=computeMissRankFilterRec(key)||[];
-  function ns(n){return(n<10?'0':'')+n;}
-  var coldSet={},missSet={};
-  coldRec.forEach(function(r){coldSet[r.num]=true;});
-  missRec.forEach(function(r){missSet[r.num]=true;});
-  var both=[],coldOnly=[],missOnly=[];
-  Object.keys(coldSet).forEach(function(n){n=parseInt(n);(missSet[n]?both:coldOnly).push(n);});
-  Object.keys(missSet).forEach(function(n){n=parseInt(n);if(!coldSet[n])missOnly.push(n);});
-  function ball(n,label,sz){
-    sz=sz||'1.3rem';
-    return '<span title="'+label+'" class="ball-sm '+_clsBall(n)+'" style="width:'+sz+';height:'+sz+';font-size:.52rem;cursor:default">'+ns(n)+'</span>';
-  }
-  var ballsHtml='';
-  if(both.length){
-    ballsHtml+='<div style="margin-bottom:.12rem"><span style="font-weight:800;color:#15803d;font-size:.58rem">共識安全號：</span>'
-      +both.map(function(n){return ball(n,'共識','1.55rem');}).join(' ')+'</div>';
-  }
-  if(coldOnly.length||missOnly.length){
-    ballsHtml+='<div style="font-size:.56rem">';
-    if(coldOnly.length)ballsHtml+='<span style="font-weight:700;color:#0369a1">冷門獨推：</span>'+coldOnly.map(function(n){return ball(n,'冷門獨推');}).join(' ')+'　';
-    if(missOnly.length)ballsHtml+='<span style="font-weight:700;color:#c2410c">遺漏獨推：</span>'+missOnly.map(function(n){return ball(n,'遺漏獨推');}).join(' ');
-    ballsHtml+='</div>';
-  }
-  if(!both.length&&!coldOnly.length&&!missOnly.length){
-    ballsHtml='<span style="font-size:.57rem;color:#64748b">兩套策略尚未產生推薦號碼</span>';
-  }
-  /* 回測標籤 */
-  var activePeriods=_consBtPeriod[key]||30;
-  var tabsHtml='<div class="consensus-bt-tabs" id="pk-cons-bt-'+key+'">'
-    +'<span style="font-size:.55rem;color:#15803d;font-weight:700;margin-right:.1rem">📊 共識回測：</span>'
-    +'<button class="consensus-bt-tab'+(activePeriods===30?' active':'')+'" data-p="30" onclick="switchConsBt(\''+key+'\',30)">近30期</button>'
-    +'<button class="consensus-bt-tab'+(activePeriods===50?' active':'')+'" data-p="50" onclick="switchConsBt(\''+key+'\',50)">近50期</button>'
-    +'<button class="consensus-bt-tab'+(activePeriods===100?' active':'')+'" data-p="100" onclick="switchConsBt(\''+key+'\',100)">近100期</button>'
-    +'</div>'
-    +'<div id="pk-cons-bt-res-'+key+'"></div>';
-  el.innerHTML='<div class="consensus-bt-panel">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
-    +'<span style="font-size:.62rem;font-weight:800;color:#14532d">🤝 雙策略共識推薦</span>'
-    +'<span style="font-size:.52rem;color:#475569">冷門過濾 ∩ 遺漏排行</span>'
-    +'</div>'
-    +ballsHtml
-    +'<div style="margin-top:.08rem;font-size:.53rem;color:#475569">共識號 = 優先五不中；分歧號 = 可考慮作五選中一主力號</div>'
-    +'<div style="margin-top:.14rem">'+tabsHtml+'</div>'
-    +'</div>';
-  renderConsensusBacktest(key,activePeriods);
-}
-
-/* ── v13.2: strict consensus and strategy arbitrator overrides ── */
 function runConsensusBacktest(key,periods){
   var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
   if(dh.length<periods+5)return null;
@@ -6183,195 +6083,7 @@ function applyConsensusTicketToSel(key,nums){
   renderDraftPanel(key);
 }
 
-function _arbSettings(key){
-  var base={missPayout:1,onePayout:1,minSamples:25,minEv:0};
-  var src={};
-  try{src=JSON.parse(localStorage.getItem('arbSettings_'+key)||'{}')||{};}catch(e){src={};}
-  Object.keys(src).forEach(function(k){base[k]=src[k];});
-  base.missPayout=Math.max(0.1,Number(base.missPayout)||1);
-  base.onePayout=Math.max(0.1,Number(base.onePayout)||1);
-  base.minSamples=Math.max(10,Math.min(100,parseInt(base.minSamples)||25));
-  base.minEv=Number(base.minEv)||0;
-  return base;
-}
 
-function applyArbSettings(key){
-  function v(id,def){var el=document.getElementById(id+'-'+key);return el?el.value:def;}
-  var s={
-    missPayout:Number(v('arb-miss-pay',1))||1,
-    onePayout:Number(v('arb-one-pay',1))||1,
-    minSamples:parseInt(v('arb-min-samples',25))||25,
-    minEv:0
-  };
-  try{localStorage.setItem('arbSettings_'+key,JSON.stringify(s));}catch(e){}
-  _clearPrefixCache(_arbCache,key);
-  renderStrategyArbPanel(key);
-}
-
-function switchArbPeriod(key,periods){
-  _arbPeriod[key]=periods;
-  renderStrategyArbPanel(key);
-}
-
-function _getAutoParamResult(key,periods,mode){
-  mode=mode||'miss0';
-  var cacheKey=key+'_'+periods+'_'+mode;
-  var res=_autoParamCache[cacheKey];
-  if(!res){res=_autoParamScan(key,periods,mode);if(res)_autoParamCache[cacheKey]=res;}
-  return res;
-}
-
-function _sourceResultFor(key,source,periods,mode){
-  if(source==='cold')return runColdFilterBacktest(key,periods);
-  if(source==='miss')return runMissRankBacktest(key,periods);
-  if(source==='consensus')return runConsensusBacktest(key,periods);
-  if(source==='adaptive')return _getAutoParamResult(key,periods,mode);
-  return null;
-}
-
-function _currentTicketForSource(key,source,res){
-  if(source==='cold')return _recNums(computeColdFilterRec(key)).slice(0,5);
-  if(source==='miss')return _recNums(computeMissRankFilterRec(key)).slice(0,5);
-  if(source==='consensus'){
-    return _buildConsensusTicket(computeColdFilterRec(key)||[],computeMissRankFilterRec(key)||[]).ticketNums.slice(0,5);
-  }
-  if(source==='adaptive'){
-    var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
-    var params=res&&res.params;
-    if(!dh.length||!params)return [];
-    return _recNums(_computeColdRecSimWithParams(dh,0,params)).slice(0,5);
-  }
-  return [];
-}
-
-function _arbMetricFromResult(res,mode,settings){
-  if(!res||!res.total)return null;
-  var wins=mode==='miss0'?res.wins:res.hits1;
-  var rate=_ratePct(wins,res.total);
-  var base=mode==='miss0'?48.3:40.3;
-  var payout=mode==='miss0'?settings.missPayout:settings.onePayout;
-  return {
-    total:res.total,wins:wins,rate:rate,base:base,lift:Math.round((rate-base)*10)/10,
-    ev:_evScore(rate,payout),
-    maxLoss:mode==='miss0'?(res.maxMissLossStreak||0):(res.maxOneLossStreak||0)
-  };
-}
-
-function _arbBuildCandidate(key,source,label,mode,periods,settings){
-  var horizons=[30,50,100],metrics={},valid=[],positive=0;
-  horizons.forEach(function(p){
-    var r=_sourceResultFor(key,source,p,mode);
-    var m=_arbMetricFromResult(r,mode,settings);
-    if(m){
-      metrics[p]=m;
-      if(m.total>=settings.minSamples)valid.push(m);
-      if(m.total>=settings.minSamples&&m.ev>settings.minEv)positive++;
-    }
-  });
-  var active=metrics[periods]||metrics[50]||metrics[30]||metrics[100];
-  if(!active)return null;
-  var activeRes=_sourceResultFor(key,source,periods,mode)||_sourceResultFor(key,source,50,mode)||_sourceResultFor(key,source,30,mode);
-  var ticket=_currentTicketForSource(key,source,activeRes);
-  var avgEv=valid.length?valid.reduce(function(a,b){return a+b.ev;},0)/valid.length:active.ev;
-  var stable=active.total>=settings.minSamples&&active.ev>settings.minEv&&positive>=Math.min(2,valid.length||1)&&ticket.length>=5;
-  return {
-    source:source,label:label,mode:mode,
-    modeLabel:mode==='miss0'?'五選不中':'五選中一',
-    ticket:ticket,metrics:metrics,active:active,avgEv:avgEv,positive:positive,stable:stable
-  };
-}
-
-function _arbCandidates(key,periods,settings){
-  var sources=[
-    ['cold','冷門過濾'],
-    ['miss','遺漏排行'],
-    ['consensus','共識補滿5支'],
-    ['adaptive','自適應走前']
-  ];
-  var out=[];
-  sources.forEach(function(s){
-    ['miss0','one1'].forEach(function(mode){
-      var c=_arbBuildCandidate(key,s[0],s[1],mode,periods,settings);
-      if(c)out.push(c);
-    });
-  });
-  out.sort(function(a,b){return b.avgEv-a.avgEv||b.active.rate-a.active.rate;});
-  return out;
-}
-
-function _arbRatesText(c){
-  return [30,50,100].map(function(p){
-    var m=c.metrics[p];
-    return m?p+'期 '+m.rate+'%':'';
-  }).filter(Boolean).join(' / ');
-}
-
-function applyArbTicketToSel(key,nums,mode,source){
-  _pickerSel[key]=nums.slice(0,5);
-  _pickerDraft[key]=[];
-  _pickerStrategySource[key]='arb_'+mode+'_'+source;
-  _refreshPickerUI(key);
-  renderSelectionRiskSummary(key);
-  renderDraftPanel(key);
-}
-
-function renderStrategyArbPanel(key){
-  var el=document.getElementById('pk-arb-rec-'+key);
-  if(!el)return;
-  var settings=_arbSettings(key);
-  var periods=_arbPeriod[key]||50;
-  var candidates=_arbCandidates(key,periods,settings);
-  var playable=candidates.filter(function(c){return c.stable;});
-  var best=playable[0]||null;
-  var top=candidates[0]||null;
-  var decision=best||top;
-  function ns(n){return(n<10?'0':'')+n;}
-  function evText(ev){return (ev>=0?'+':'')+(Math.round(ev*1000)/10)+'%';}
-  function liftText(v){return (v>=0?'高 ':'低 ')+Math.abs(v)+'%';}
-  var badge=best
-    ?'<span class="arb-badge arb-badge-go">可參考：'+best.modeLabel+'｜'+best.label+'</span>'
-    :'<span class="arb-badge arb-badge-stop">未達門檻：先觀察</span>';
-  var ticketHtml='';
-  if(decision&&decision.ticket.length>=5){
-    var ticketLabel=best?'目前可參考票':'觀察用最高分票（未達下注門檻）';
-    ticketHtml='<div class="arb-ticket"><div class="arb-ticket-label">'+ticketLabel+'</div>'+decision.ticket.map(function(n){
-      return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.8rem;height:1.8rem;font-size:.7rem">'+ns(n)+'</span>';
-    }).join('')+'<button class="arb-apply" onclick="applyArbTicketToSel(\''+key+'\',['+decision.ticket.join(',')+'],\''+decision.mode+'\',\''+decision.source+'\')">帶入選號盤</button></div>';
-  }
-  var detail=decision
-    ?'<div class="arb-row"><span>玩法判斷</span><strong>'+(best?'優先看 ':'先不要硬打；目前最高分是 ')+decision.modeLabel+' / '+decision.label+'</strong></div>'
-      +'<div class="arb-row"><span>為什麼</span><strong>'+periods+'期勝率 '+decision.active.rate+'%，比隨機基準 '+decision.active.base+'% '+liftText(decision.active.lift)+'</strong></div>'
-      +'<div class="arb-row"><span>下注門檻</span><strong>3個視窗中有 '+decision.positive+' 個估算報酬為正；至少要 2 個才算可參考</strong></div>'
-      +'<div class="arb-row"><span>風險提醒</span><strong>樣本 '+decision.active.total+' 期；歷史最大連續失敗 '+decision.active.maxLoss+' 期；報酬估算 '+evText(decision.active.ev)+'</strong></div>'
-      +'<div class="arb-row"><span>短中長期勝率</span><strong>'+_arbRatesText(decision)+'</strong></div>'
-    :'<div class="arb-row"><span>狀態</span><strong>資料不足</strong></div>';
-  var rows=candidates.slice(0,6).map(function(c){
-    var color=c.stable?'#166534':(c.active.ev>0?'#d97706':'#64748b');
-    var tag=c.stable?'符合門檻':(c.active.ev>0?'只有單段偏好':'觀察');
-    return '<div class="arb-row"><span>'+c.label+'｜'+c.modeLabel+'</span><strong style="color:'+color+'">勝率 '+c.active.rate+'%｜報酬估算 '+evText(c.active.ev)+'｜'+tag+'</strong></div>';
-  }).join('');
-  if(!rows)rows='<div class="arb-row"><span>候選策略</span><strong>資料不足</strong></div>';
-  el.innerHTML='<div class="arb-panel">'
-    +'<div class="arb-head"><span class="arb-title">🧭 策略仲裁器</span>'+badge+'</div>'
-    +'<div class="arb-help"><strong>這區的用意：</strong>不是替你盲目選號，而是把目前各種篩選法拿去做嚴格歷史回測，判斷今天比較適合看「五選不中」還是「五選中一」。若沒有同時通過短中長期門檻，就顯示先觀察。</div>'
-    +'<div class="arb-controls">'
-    +'<label class="arb-field">五不中賠率<br><small style="font-weight:600;color:#64748b">只影響報酬估算</small><input id="arb-miss-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.missPayout+'"></label>'
-    +'<label class="arb-field">五選中一賠率<br><small style="font-weight:600;color:#64748b">只影響報酬估算</small><input id="arb-one-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.onePayout+'"></label>'
-    +'<label class="arb-field">最低樣本期數<br><small style="font-weight:600;color:#64748b">太少不採信</small><input id="arb-min-samples-'+key+'" type="number" step="1" min="10" max="100" value="'+settings.minSamples+'"></label>'
-    +'<button class="arb-apply" onclick="applyArbSettings(\''+key+'\')">重新比較</button>'
-    +'</div>'
-    +'<div class="arb-tabs">'
-    +'<span style="font-size:.7rem;color:#4338ca;font-weight:900;margin-right:.1rem">主要看：</span>'
-    +'<button class="arb-tab'+(periods===30?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',30)">近30期</button>'
-    +'<button class="arb-tab'+(periods===50?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',50)">近50期</button>'
-    +'<button class="arb-tab'+(periods===100?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',100)">近100期</button>'
-    +'</div>'
-    +ticketHtml
-    +'<div class="arb-grid"><div class="arb-card"><div class="arb-card-title">白話決策</div>'+detail+'</div>'
-    +'<div class="arb-card"><div class="arb-card-title">其他候選策略</div>'+rows+'</div></div>'
-    +'<div class="arb-note">基準說明：隨機選 5 支時，五選不中約 48.3%，五選中一約 40.3%。「報酬估算」是依你填的賠率換算，正數才代表回測上可能有優勢；但仍只是歷史檢查，不保證下一期。</div>'
-    +'</div>';
-}
 
 function renderColdFilterPanel(key){
   var el=document.getElementById('pk-cold-rec-'+key);
@@ -7916,8 +7628,8 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
 
     def _html_has_required_features(html: str) -> bool:
         return (
-            "pk-arb-rec" in html
-            and "function renderStrategyArbPanel" in html
+            "pk-consensus-rec" in html
+            and "function renderConsensusBtPanel" in html
             and "function _buildConsensusTicket" in html
         )
 
@@ -7946,7 +7658,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         if valid == 0:
             raise RuntimeError("no valid lottery data, report was not generated")
         if not _output_has_required_features():
-            raise RuntimeError("generated report is missing required v13.2 UI features")
+            raise RuntimeError("generated report is missing required v13.3 UI features")
         _mark_report_current()
 
     if run_init:
@@ -8092,7 +7804,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 and "function resetColdRuleSettings" in source
                 and "function renderMissRankFilterPanel" in source
                 and "function openMissRankCauseModal" in source
-                and "function renderStrategyArbPanel" in source
+                and "function renderConsensusBtPanel" in source
                 and "function _buildConsensusTicket" in source
             ),
             "html_has_new_cold_rule": (
@@ -8104,7 +7816,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 and "遺漏排行篩選推薦" in html
                 and "手動調整遺漏排行條件" in html
                 and "openMissRankCauseModal" in html
-                and "策略仲裁器" in html
+                and "雙策略共識推薦" in html
             ),
             "html_has_old_top2_rule": (
                 "冷門前2" in html or "前2代表" in html or "冷門Top2" in html
