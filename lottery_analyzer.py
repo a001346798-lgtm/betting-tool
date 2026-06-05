@@ -3849,7 +3849,7 @@ function runColdFilterBacktest(key,periods){
 function _coldPrimaryCause(r){
   var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
   var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
-  if(rank>0&&rank<=2)return '冷門Top2';
+  if(rank>0&&rank<=2)return '冷門前2代表';
   if(freq>=3)return '近20期≥3次';
   if(heat>=15)return '熱力≥15%';
   if(miss<=5)return '遺漏≤5期';
@@ -3879,7 +3879,7 @@ function _coldCauseLabels(r){
   if(dp>=80)labels.push('危險度≥80%');
   else if(dp>=60)labels.push('危險度60~79%');
   if(rank>=6)labels.push('補位到冷門第6期後');
-  else if(rank>0&&rank<=2)labels.push('來自冷門Top2');
+  else if(rank>0&&rank<=2)labels.push('來自冷門前2代表');
   if(r.tiebreak)labels.push('熱力平手由危險度決定');
   if(!labels.length)labels.push('無明顯單一條件');
   return labels;
@@ -3933,6 +3933,7 @@ function _renderColdCauseAnalysis(res){
     +'<summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
     +'<div style="font-size:.6rem;color:#475569;margin-bottom:.18rem;line-height:1.6">'
     +'平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。'
+    +'冷門前2名合計最多只取一支代表；若中2裡出現前2代表，表示兩顆命中裡其中一顆是它。'
     +'下方「逐顆條件」是命中號碼本身的標籤；「中2配對」才是同一期兩顆一起命中的結構。</div>'
     +'<div class="cold-cause-grid">'
     +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1逐顆條件</div>'
@@ -4015,8 +4016,9 @@ function _computeColdRecSim(dh,histStart){
   function hs(n){var h=getHP(n);if(h.has)return h.rate;return simNHD[n]?(simNHD[n].recent_freq||0):0;}
   function dp2(n){return simNHD[n]?(simNHD[n].danger_pct||0):0;}
   function cm(n){return simNHD[n]?(simNHD[n].current_miss||0):0;}
-  var selected=[],usedNums={};
+  var selected=[],usedNums={},top2Picked=false;
   for(var pi=0;pi<simPD.length&&selected.length<5;pi++){
+    if(pi<2&&top2Picked)continue;
     var cands=(simPD[pi].ref_numbers||[]).slice();
     var remaining=[];
     for(var ci=0;ci<cands.length;ci++){
@@ -4037,6 +4039,7 @@ function _computeColdRecSim(dh,histStart){
     var chosen=remaining[0];
     var tiedNums=remaining.filter(function(n){return hs(n)===hs(chosen);});
     usedNums[chosen]=true;
+    if(pi<2)top2Picked=true;
     selected.push({
       num:chosen,
       pi:pi,
@@ -4104,8 +4107,10 @@ function computeColdFilterRec(key){
 
   var selected=[];
   var usedNums={};
+  var top2Picked=false;
 
   for(var pi=0;pi<pd.length&&selected.length<5;pi++){
+    if(pi<2&&top2Picked)continue;
     var period=pd[pi];
     var cands=(period.ref_numbers||[]).slice();
     if(!cands.length)continue;
@@ -4135,6 +4140,7 @@ function computeColdFilterRec(key){
     });
     var chosen=remaining[0];
     usedNums[chosen]=true;
+    if(pi<2)top2Picked=true;
 
     var heat=heatScore(chosen);
     var dp=dangerPct(chosen);
