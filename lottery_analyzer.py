@@ -6052,6 +6052,52 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         response.headers["X-App-Build"] = build_id[:16]
         return response
 
+    @app.route("/api/build", methods=["GET"])
+    def api_build():
+        """部署後快速確認：程式版本與報告 HTML 是否已重建到新版。"""
+        version_value = ""
+        try:
+            version_value = version_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            version_value = ""
+
+        html = ""
+        if output_path.exists():
+            try:
+                html = output_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                html = ""
+
+        source = ""
+        try:
+            source = Path(__file__).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            source = ""
+
+        report_current = False
+        try:
+            report_current = not _report_needs_rebuild()
+        except Exception:
+            report_current = False
+
+        return jsonify({
+            "build": build_id[:16],
+            "report_exists": output_path.exists(),
+            "report_current": report_current,
+            "version": version_value[:16],
+            "source_has_new_cold_rule": (
+                "當期代表：從當期開獎五碼中挑選" in source
+                and "冷門排行前5期" in source
+            ),
+            "html_has_new_cold_rule": (
+                "當期代表" in html
+                and ("冷門排行前5" in html or "冷門前5期" in html)
+            ),
+            "html_has_old_top2_rule": (
+                "冷門前2" in html or "前2代表" in html or "冷門Top2" in html
+            ),
+        })
+
     @app.route("/api/betlog/load", methods=["GET"])
     def api_betlog_load():
         """從 Supabase 載入選號紀錄"""
