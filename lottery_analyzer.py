@@ -878,6 +878,57 @@ class LotteryScrapers:
         clean.sort(key=lambda x: x["date"], reverse=True)
         return clean[:count]
 
+    @staticmethod
+    def _expected_latest_for_config(cfg: Dict) -> _date:
+        tz_name = cfg.get("draw_timezone", "UTC")
+        ready = str(cfg.get("result_ready_time", "00:00"))
+        try:
+            now_local = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            now_local = datetime.now()
+        try:
+            hour_s, minute_s = ready.split(":", 1)
+            ready_minutes = int(hour_s) * 60 + int(minute_s)
+        except Exception:
+            ready_minutes = 0
+        expected = now_local.date()
+        if now_local.hour * 60 + now_local.minute < ready_minutes:
+            expected = expected - timedelta(days=1)
+        draw_weekdays = cfg.get("draw_weekdays")
+        if draw_weekdays:
+            allowed = {int(x) for x in draw_weekdays}
+            while expected.weekday() not in allowed:
+                expected = expected - timedelta(days=1)
+        return expected
+
+    @classmethod
+    def _scrape_ny_open_data_take5(cls, count: int,
+                                   dataset_id: str = "dg63-4siq") -> List[Dict]:
+        limit = min(max(count + 20, 30), 500)
+        params = (
+            f"?$select=draw_date,evening_winning_numbers"
+            f"&$where=evening_winning_numbers%20IS%20NOT%20NULL"
+            f"&$order=draw_date%20DESC"
+            f"&$limit={limit}"
+        )
+        data = cls._json(
+            f"https://data.ny.gov/resource/{dataset_id}.json{params}",
+            headers=cls.JSON_HEADERS,
+            referer=f"https://data.ny.gov/d/{dataset_id}",
+        )
+        draws: List[Dict] = []
+        if isinstance(data, list):
+            for d in data:
+                if not isinstance(d, dict):
+                    continue
+                draw = cls._draw(
+                    d.get("draw_date"),
+                    d.get("evening_winning_numbers"),
+                )
+                if draw:
+                    draws.append(draw)
+        return cls._clean_draws(draws, count)
+
     @classmethod
     def _best_source(cls, label: str, count: int,
                      sources: List[Tuple[str, Callable[[], List[Dict]]]]) -> List[Dict]:
@@ -1216,13 +1267,24 @@ class LotteryScrapers:
     def scrape_newyork_take5_bulk(cls, count: int = 30) -> List[Dict]:
         """NY Take 5 晚盤（Evening）。
 
-        策略：同時抓 lotto.net 與 NY Open Data，合併去重後取最新。
-        lotto.net 通常當天即更新；NY Open Data 可能延遲 1 天以上。
-        兩源互為 fallback，防止任一來源落後時漏抓最新一期。
+        策略：先抓官方 NY Open Data JSON；如果已到預期最新日就立即返回。
+        官方源延遲時，再抓 lotto.net / LotteryPost 做 fallback。
         """
+        expected_latest = cls._expected_latest_for_config(LOTTERY_CONFIG["newyork_take5"])
         pool: List[Dict] = []
 
-        # ── Source A: lotto.net（通常最即時）──────────────────
+        # ── Source A: NY Open Data official JSON（最快且最穩）────
+        nyod_draws = cls._scrape_ny_open_data_take5(count=count)
+        if nyod_draws:
+            nyod_latest = nyod_draws[0]["date"]
+            print(f"[SCRAPER] NY Take5 evening: NY Open Data latest {nyod_latest}")
+            if pd.to_datetime(nyod_latest).date() >= expected_latest:
+                return nyod_draws
+            pool.extend(nyod_draws)
+        else:
+            print("[SCRAPER] NY Take5 evening: NY Open Data 無回應或無資料")
+
+        # ── Source B: lotto.net（官方源延遲時補位）───────────────
         lotto_draws: List[Dict] = []
         cur_year = datetime.now().year
         for y in range(cur_year, cur_year - 2, -1):
@@ -1245,32 +1307,6 @@ class LotteryScrapers:
             print("[SCRAPER] NY Take5 evening: lotto.net 無回應或無資料 — "
                   "time_filter 可能需要更新（預期篩選字串：'10:30'）")
         pool.extend(lotto_draws)
-
-        # ── Source B: NY Open Data（可能延遲，但資料齊全）────────
-        nyod_draws: List[Dict] = []
-        limit = min(max(count + 20, 100), 50000)
-        nyod_url = (
-            "https://data.ny.gov/resource/dg63-4siq.json"
-            f"?$limit={limit}&$order=draw_date%20DESC"
-        )
-        data = cls._json(nyod_url, headers=cls.JSON_HEADERS,
-                         referer="https://data.ny.gov/d/dg63-4siq")
-        if isinstance(data, list):
-            for d in data:
-                if not isinstance(d, dict):
-                    continue
-                draw = cls._draw(
-                    d.get("draw_date"),
-                    d.get("evening_winning_numbers"),
-                )
-                if draw:
-                    nyod_draws.append(draw)
-        if nyod_draws:
-            nyod_latest = max(d["date"] for d in nyod_draws)
-            print(f"[SCRAPER] NY Take5 evening: NY Open Data latest {nyod_latest}")
-        else:
-            print("[SCRAPER] NY Take5 evening: NY Open Data 無回應或無資料")
-        pool.extend(nyod_draws)
 
         lp_draws = cls._scrape_lotterypost("ny/take5", count=count, draw_label="Evening")
         if lp_draws:
@@ -1831,6 +1867,35 @@ tr.stripe td{background:#f8fafc}
   margin:.22rem 0 .1rem}
 .cold-rec-reason{font-size:.56rem;color:#1e3a5f;line-height:1.55;
   border-top:1px solid #bae6fd;margin-top:.22rem;padding-top:.18rem}
+.cold-rule-editor{margin:.26rem 0 .3rem;background:rgba(255,255,255,.72);
+  border:1px solid #bae6fd;border-radius:.5rem;padding:.34rem .42rem}
+.cold-rule-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.28rem .38rem}
+.cold-rule-field{display:flex;flex-direction:column;gap:.12rem;font-size:.55rem;color:#075985;font-weight:800}
+.cold-rule-field input,.cold-rule-field select{height:1.65rem;border:1px solid #bae6fd;
+  border-radius:.34rem;background:#fff;color:#0f172a;font-size:.62rem;padding:0 .36rem;min-width:0}
+.cold-rule-checks{display:flex;gap:.42rem;flex-wrap:wrap;margin-top:.3rem;font-size:.58rem;color:#075985;font-weight:800}
+.cold-rule-actions{display:flex;gap:.28rem;justify-content:flex-end;margin-top:.34rem;flex-wrap:wrap}
+.cold-rule-actions button{font-size:.58rem;border:none;border-radius:.34rem;padding:.18rem .46rem;
+  cursor:pointer;font-weight:900;line-height:1.45}
+.cold-rule-apply{background:#0369a1;color:#fff}
+.cold-rule-reset{background:#e0f2fe;color:#075985;border:1px solid #7dd3fc!important}
+.miss-rank-panel{background:linear-gradient(135deg,#fff7ed,#fffbeb);
+  border:1.5px solid #fdba74;border-radius:.65rem;padding:.45rem .55rem;margin-bottom:.38rem}
+.miss-rank-balls{display:flex;gap:.3rem;justify-content:center;flex-wrap:wrap;margin:.22rem 0 .1rem}
+.miss-rank-reason{font-size:.56rem;color:#7c2d12;line-height:1.58;
+  border-top:1px solid #fed7aa;margin-top:.22rem;padding-top:.18rem}
+.miss-rank-editor{margin:.26rem 0 .3rem;background:rgba(255,255,255,.75);
+  border:1px solid #fed7aa;border-radius:.5rem;padding:.34rem .42rem}
+.miss-rank-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.28rem .38rem}
+.miss-rank-field{display:flex;flex-direction:column;gap:.12rem;font-size:.55rem;color:#9a3412;font-weight:800}
+.miss-rank-field input,.miss-rank-field select{height:1.65rem;border:1px solid #fed7aa;
+  border-radius:.34rem;background:#fff;color:#0f172a;font-size:.62rem;padding:0 .36rem;min-width:0}
+.miss-rank-checks{display:flex;gap:.42rem;flex-wrap:wrap;margin-top:.3rem;font-size:.58rem;color:#9a3412;font-weight:800}
+.miss-rank-actions{display:flex;gap:.28rem;justify-content:flex-end;margin-top:.34rem;flex-wrap:wrap}
+.miss-rank-actions button{font-size:.58rem;border:none;border-radius:.34rem;padding:.18rem .46rem;
+  cursor:pointer;font-weight:900;line-height:1.45}
+.miss-rank-apply{background:#c2410c;color:#fff}
+.miss-rank-reset{background:#ffedd5;color:#9a3412;border:1px solid #fdba74!important}
 /* Cold-filter historical backtest (v12) */
 .cold-bt-section{border-top:1px solid #bae6fd;margin-top:.32rem;padding-top:.28rem}
 .cold-bt-tabs{display:flex;gap:.18rem;margin-bottom:.2rem;align-items:center}
@@ -1841,6 +1906,55 @@ tr.stripe td{background:#f8fafc}
 .cold-bt-result{font-size:.58rem;line-height:1.6}
 .cold-bt-win-bar{font-weight:800;margin-bottom:.1rem}
 .cold-bt-hits{color:#475569;margin-top:.06rem}
+.cold-cause-box{margin-top:.24rem;border-top:1px dashed #93c5fd;padding-top:.22rem}
+.cold-cause-title{font-size:.66rem;font-weight:900;color:#0c4a6e;margin-bottom:.18rem}
+.cold-cause-grid{display:grid;grid-template-columns:1fr 1fr;gap:.32rem}
+.cold-cause-card{background:rgba(255,255,255,.68);border:1px solid #bae6fd;
+  border-radius:.42rem;padding:.28rem .34rem}
+.cold-cause-card-title{font-size:.62rem;font-weight:900;color:#0369a1;margin-bottom:.14rem}
+.cold-cause-row{display:flex;justify-content:space-between;gap:.3rem;font-size:.6rem;
+  color:#334155;border-bottom:1px solid rgba(186,230,253,.45);padding:.08rem 0;line-height:1.45}
+.cold-cause-row span{flex:1;min-width:0;overflow-wrap:anywhere}
+.cold-cause-row strong{white-space:nowrap}
+.cold-cause-row:last-child{border-bottom:none}
+.cold-cause-sug{margin-top:.22rem;font-size:.6rem;color:#7c2d12;background:#fff7ed;
+  border:1px solid #fed7aa;border-radius:.38rem;padding:.22rem .3rem;line-height:1.65}
+.cold-cause-case{font-size:.58rem;color:#475569;margin-top:.16rem;line-height:1.6}
+.cold-cause-expand{font-size:.6rem;border:none;border-radius:.35rem;background:#0369a1;
+  color:#fff;font-weight:800;padding:.16rem .42rem;cursor:pointer;white-space:nowrap}
+.miss-rank-expand{background:#c2410c}
+.cold-modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9998;
+  display:flex;align-items:center;justify-content:center;padding:1rem}
+.cold-modal{width:min(860px,96vw);max-height:88vh;overflow:auto;background:#f8fbff;
+  border:1px solid #93c5fd;border-radius:.7rem;box-shadow:0 18px 60px rgba(15,23,42,.35)}
+.cold-modal.miss-rank-modal{background:#fffaf3;border-color:#fdba74}
+.cold-modal.miss-rank-modal .cold-modal-head{background:#9a3412}
+.cold-modal.miss-rank-modal .cold-cause-card{border-color:#fdba74}
+.cold-modal.miss-rank-modal .cold-cause-card-title{color:#c2410c}
+.cold-modal-head{position:sticky;top:0;background:#0f3c88;color:#fff;padding:.65rem .85rem;
+  display:flex;align-items:center;justify-content:space-between;gap:.8rem;z-index:1}
+.cold-modal-title{font-size:.95rem;font-weight:900}
+.cold-modal-close{border:1px solid rgba(255,255,255,.45);background:rgba(255,255,255,.14);
+  color:#fff;border-radius:.35rem;font-size:.78rem;font-weight:900;padding:.18rem .55rem;cursor:pointer}
+.cold-modal-body{padding:.85rem;font-size:.78rem;line-height:1.75;color:#1e293b}
+.cold-modal-body .cold-cause-card-title{font-size:.82rem}
+.cold-modal-body .cold-cause-row{font-size:.76rem;padding:.12rem 0}
+.cold-modal-body .cold-cause-case{font-size:.74rem}
+.cold-modal-body .cold-cause-sug{font-size:.74rem}
+@media(max-width:520px){.cold-cause-grid,.cold-rule-grid,.miss-rank-grid{grid-template-columns:1fr}}
+/* ── v13: 連敗警報 / 共識面板 / 陷阱率 / 自適應參數 / 五選中一 ── */
+.streak-alert-box{border-radius:.45rem;padding:.26rem .42rem;margin-bottom:.22rem;font-size:.6rem;font-weight:700;display:flex;align-items:center;gap:.3rem;line-height:1.5}
+.streak-alert-warn{background:#fef3c7;border:1px solid #fcd34d;color:#92400e}
+.streak-alert-danger{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b}
+.consensus-panel{background:#f0fdf4;border:1px solid #86efac;border-radius:.45rem;padding:.26rem .42rem;margin:.2rem 0;font-size:.57rem;line-height:1.55}
+.trap-section{border-top:1px solid #e0f2fe;margin-top:.26rem;padding-top:.2rem}
+.trap-row{display:flex;align-items:center;gap:.28rem;padding:.06rem 0;border-bottom:1px solid #f0f9ff;font-size:.56rem}
+.param-scan-box{border-top:1px solid #bae6fd;margin-top:.26rem;padding-top:.2rem}
+.param-scan-result{background:#f0fdf4;border:1.5px solid #86efac;border-radius:.38rem;padding:.2rem .36rem;font-size:.57rem;margin-top:.1rem;line-height:1.55}
+.one-hit-panel{background:linear-gradient(135deg,#fdf4ff,#fae8ff);border:1.5px solid #d8b4fe;border-radius:.6rem;padding:.38rem .48rem;margin-top:.28rem}
+.one-hit-bt-tabs{display:flex;gap:.16rem;margin-bottom:.18rem;align-items:center}
+.one-hit-bt-tab{font-size:.55rem;padding:.1rem .26rem;border:1px solid #d8b4fe;border-radius:.28rem;background:#fff;color:#7e22ce;cursor:pointer;font-weight:600;line-height:1.5;transition:background .1s,color .1s}
+.one-hit-bt-tab.active{background:#7e22ce;color:#fff;border-color:#7e22ce}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -2713,6 +2827,7 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
         """Embed JS globals for all analysis data."""
         current_misses = mr["current_misses"]
         miss_json      = _json.dumps({str(k): v for k, v in current_misses.items()})
+        miss_rank_json = _json.dumps(mr.get("window_data", {}))
         recent_json    = _json.dumps(pr.get("recent_8", []))
         draw_json      = _json.dumps(pr.get("recent_match", pr.get("recent_8", [])))
         period_json    = _json.dumps(pr.get("top8_lowest", []))
@@ -2731,6 +2846,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<script>'
             'window._MISS_DATA=window._MISS_DATA||{};'
             'window._MISS_DATA["' + key + '"]=' + miss_json + ';'
+            'window._MISS_RANK_DATA=window._MISS_RANK_DATA||{};'
+            'window._MISS_RANK_DATA["' + key + '"]=' + miss_rank_json + ';'
             'window._RECENT_DATA=window._RECENT_DATA||{};'
             'window._RECENT_DATA["' + key + '"]=' + recent_json + ';'
             'window._DRAW_DATA=window._DRAW_DATA||{};'
@@ -2771,6 +2888,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
         return (
             # ── Cold-filter recommendation panel (v11)
             '<div id="pk-cold-rec-' + key + '"></div>'
+            # ── Miss-rank recommendation panel
+            '<div id="pk-miss-rank-rec-' + key + '"></div>'
             # ── Miss distribution histogram (collapsible)
             '<details style="margin-bottom:.4rem">'
             '<summary style="color:#6366f1;font-size:.68rem;font-weight:600;cursor:pointer;list-style:none;display:flex;align-items:center;gap:.22rem;padding:.22rem .3rem;border-radius:.3rem;transition:background .12s" onmouseover="this.style.background=\'#eff6ff\'" onmouseout="this.style.background=\'\'">'
@@ -3277,6 +3396,7 @@ function switchTab(key){
   renderBetLog(key);
   _restoreLock(key);
   renderColdFilterPanel(key);
+  renderMissRankFilterPanel(key);
 }
 function setMissWin(key,win){
   var col=document.getElementById('miss-col-'+key);
@@ -3407,9 +3527,14 @@ window._BT=window._BT||{};
 function _btStore(key,d){
   window._BT[key]=d;
   window._MISS_DATA=window._MISS_DATA||{};
+  window._MISS_RANK_DATA=window._MISS_RANK_DATA||{};
   window._RECENT_DATA=window._RECENT_DATA||{};
   window._DRAW_DATA=window._DRAW_DATA||{};
   if(d.miss_data)         window._MISS_DATA[key]=d.miss_data;
+  if(d.miss_rank_data){
+    window._MISS_RANK_DATA[key]=d.miss_rank_data;
+    _missRankClearBtCache(key);
+  }
   if(d.recent_data)       window._RECENT_DATA[key]=d.recent_data;
   if(d.draw_data)         window._DRAW_DATA[key]=d.draw_data;
   if(d.period_data){      window._PERIOD_DATA=window._PERIOD_DATA||{};      window._PERIOD_DATA[key]=d.period_data; }
@@ -3419,7 +3544,9 @@ function _btStore(key,d){
   if(d.rev_oe_data){      window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
   if(d.draw_history_data){window._DRAW_HISTORY=window._DRAW_HISTORY||{};    window._DRAW_HISTORY[key]=d.draw_history_data;
     // Invalidate backtest cache for this key when draw history changes
-    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];});
+    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _oneHitBtCache[key+'_'+p];});
+    delete _autoParamCache[key+'_50'];
+    _missRankClearBtCache(key);
   }
 }
 
@@ -3443,6 +3570,7 @@ function updateSelectionBoard(key){
   renderBetLog(key);             // 投注紀錄命中對比
   renderOEColorGuide(key);       // 今日配比推薦（v10.2）
   renderColdFilterPanel(key);    // 冷門過濾智能推薦（v11）
+  renderMissRankFilterPanel(key); // 遺漏排行篩選推薦
 }
 
 /* ── updateTailOmissions: （panel_inner_html 已包含，此為獨立觸發入口）── */
@@ -3529,6 +3657,7 @@ var _betLogSyncTimer={};
 var _betLogSyncHash={};
 var _pickerLock={};
 window._MISS_DATA=window._MISS_DATA||{};
+window._MISS_RANK_DATA=window._MISS_RANK_DATA||{};
 window._RECENT_DATA=window._RECENT_DATA||{};
 
 function _clsBall(n){return n%3===1?'b-red':n%3===2?'b-blue':'b-green';}
@@ -3694,6 +3823,763 @@ function renderDraftPanel(key){
 /* ── 冷門過濾歷史回測（v12）── */
 var _coldBtCache={};
 var _coldBtPeriod={};
+var _missRankBtCache={};
+var _missRankBtPeriod={};
+
+function _coldFilterRule(key){
+  var base={
+    label:'手動條件',
+    latestMaxFreq:4,
+    coldTopPeriods:5,
+    hotFreqCutoff:4,
+    maxMiss:20,
+    maxDanger:null,
+    excludeNeighbor:true,
+    excludeHeatZero:true,
+    latestSort:['heat','danger','freq','miss'],
+    coldSort:['heat','danger','freq','miss']
+  };
+  var src={};
+  try{
+    src=JSON.parse(localStorage.getItem('coldFilterRule_'+key)||'{}')||{};
+  }catch(e){
+    src={};
+  }
+  var out={};
+  Object.keys(base).forEach(function(k){out[k]=base[k];});
+  Object.keys(src).forEach(function(k){out[k]=src[k];});
+  out.latestMaxFreq=Math.max(0,Math.min(20,parseInt(out.latestMaxFreq)||base.latestMaxFreq));
+  out.coldTopPeriods=Math.max(1,Math.min(5,parseInt(out.coldTopPeriods)||base.coldTopPeriods));
+  out.hotFreqCutoff=Math.max(1,Math.min(20,parseInt(out.hotFreqCutoff)||base.hotFreqCutoff));
+  out.maxMiss=Math.max(1,Math.min(80,parseInt(out.maxMiss)||base.maxMiss));
+  if(out.maxDanger===''||out.maxDanger===null||out.maxDanger===undefined){
+    out.maxDanger=null;
+  }else{
+    out.maxDanger=Math.max(0,Math.min(100,parseInt(out.maxDanger)));
+    if(isNaN(out.maxDanger))out.maxDanger=null;
+  }
+  out.excludeNeighbor=out.excludeNeighbor!==false;
+  out.excludeHeatZero=out.excludeHeatZero!==false;
+  out.latestSort=(out.latestSort||base.latestSort).slice();
+  out.coldSort=(out.coldSort||base.coldSort).slice();
+  return out;
+}
+
+function _coldSortPreset(value){
+  var map={
+    heat:'heat,danger,freq,miss',
+    danger:'danger,heat,freq,miss',
+    freq:'freq,heat,danger,miss',
+    miss:'miss,heat,danger,freq'
+  };
+  return (map[value]||map.heat).split(',');
+}
+
+function _coldSortPresetValue(order){
+  var s=(order||[]).join(',');
+  if(s==='danger,heat,freq,miss')return 'danger';
+  if(s==='freq,heat,danger,miss')return 'freq';
+  if(s==='miss,heat,danger,freq')return 'miss';
+  return 'heat';
+}
+
+function _coldClearBtCache(key){
+  Object.keys(_coldBtCache).forEach(function(k){
+    if(k.indexOf(key+'_')===0)delete _coldBtCache[k];
+  });
+}
+
+function _coldStatValue(n,metric,fns){
+  if(metric==='heat')return Number(fns.heat(n)||0);
+  if(metric==='danger')return Number(fns.danger(n)||0);
+  if(metric==='freq')return Number(fns.freq(n)||0);
+  if(metric==='miss')return Number(fns.miss(n)||0);
+  if(metric==='missDesc')return -Number(fns.miss(n)||0);
+  return Number(n)||0;
+}
+
+function _coldCompareBy(a,b,order,fns){
+  order=order||['heat','danger','freq','miss'];
+  for(var i=0;i<order.length;i++){
+    var va=_coldStatValue(a,order[i],fns);
+    var vb=_coldStatValue(b,order[i],fns);
+    if(va!==vb)return va-vb;
+  }
+  return a-b;
+}
+
+function _coldMetricLabel(metric){
+  if(metric==='heat')return '低熱力';
+  if(metric==='danger')return '低危險度';
+  if(metric==='freq')return '近20低次數';
+  if(metric==='miss')return '低遺漏';
+  if(metric==='missDesc')return '高遺漏';
+  return metric;
+}
+
+function _coldSortSummary(order){
+  return (order||[]).map(_coldMetricLabel).join('→');
+}
+
+function _coldRuleSummary(rule){
+  var dangerText=rule.maxDanger===null||rule.maxDanger===undefined
+    ?'不設危險上限'
+    :'危≤'+rule.maxDanger+'%';
+  return rule.label+'｜當期近20≤'+rule.latestMaxFreq
+    +'｜冷門前'+rule.coldTopPeriods+'期'
+    +'｜過熱≥'+rule.hotFreqCutoff+'次'
+    +'｜漏≤'+rule.maxMiss
+    +'｜'+dangerText
+    +'｜'+(rule.excludeNeighbor?'排鄰號':'保留鄰號');
+}
+
+function _coldSortSelect(id,value){
+  var opts=[
+    ['heat','低熱力 → 低危險 → 近20低次數'],
+    ['danger','低危險 → 低熱力 → 近20低次數'],
+    ['freq','近20低次數 → 低熱力 → 低危險'],
+    ['miss','低遺漏 → 低熱力 → 低危險']
+  ];
+  return '<select id="'+id+'">'
+    +opts.map(function(o){
+      return '<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+o[1]+'</option>';
+    }).join('')
+    +'</select>';
+}
+
+function _coldRuleEditor(key,rule){
+  var dangerVal=rule.maxDanger===null||rule.maxDanger===undefined?'':rule.maxDanger;
+  return '<details class="cold-rule-editor">'
+    +'<summary style="cursor:pointer;list-style:none;font-size:.62rem;font-weight:900;color:#0369a1">'
+    +'▶ 手動調整篩選條件</summary>'
+    +'<div class="cold-rule-grid" style="margin-top:.32rem">'
+    +'<label class="cold-rule-field">當期代表近20上限'
+    +'<input id="cold-latest-'+key+'" type="number" min="0" max="20" step="1" value="'+rule.latestMaxFreq+'"></label>'
+    +'<label class="cold-rule-field">冷門排行取前幾期（最多5）'
+    +'<input id="cold-top-'+key+'" type="number" min="1" max="5" step="1" value="'+rule.coldTopPeriods+'"></label>'
+    +'<label class="cold-rule-field">過熱剔除門檻（近20≥）'
+    +'<input id="cold-hot-'+key+'" type="number" min="1" max="20" step="1" value="'+rule.hotFreqCutoff+'"></label>'
+    +'<label class="cold-rule-field">最大遺漏期數'
+    +'<input id="cold-miss-'+key+'" type="number" min="1" max="80" step="1" value="'+rule.maxMiss+'"></label>'
+    +'<label class="cold-rule-field">危險度上限（空白=不限制）'
+    +'<input id="cold-danger-'+key+'" type="number" min="0" max="100" step="1" value="'+dangerVal+'"></label>'
+    +'<label class="cold-rule-field">當期代表排序'
+    +_coldSortSelect('cold-latest-sort-'+key,_coldSortPresetValue(rule.latestSort))+'</label>'
+    +'<label class="cold-rule-field">冷門補號排序'
+    +_coldSortSelect('cold-cold-sort-'+key,_coldSortPresetValue(rule.coldSort))+'</label>'
+    +'</div>'
+    +'<div class="cold-rule-checks">'
+    +'<label><input id="cold-neighbor-'+key+'" type="checkbox" '+(rule.excludeNeighbor?'checked':'')+'> 排除當期鄰號</label>'
+    +'<label><input id="cold-heat0-'+key+'" type="checkbox" '+(rule.excludeHeatZero?'checked':'')+'> 排除熱力0%</label>'
+    +'</div>'
+    +'<div class="cold-rule-actions">'
+    +'<button class="cold-rule-reset" onclick="resetColdRuleSettings(\''+key+'\')">恢復預設</button>'
+    +'<button class="cold-rule-apply" onclick="applyColdRuleSettings(\''+key+'\')">套用條件</button>'
+    +'</div>'
+    +'</details>';
+}
+
+function applyColdRuleSettings(key){
+  function el(id){return document.getElementById(id+'-'+key);}
+  function intVal(id,def,min,max){
+    var v=parseInt((el(id)||{}).value);
+    if(isNaN(v))v=def;
+    return Math.max(min,Math.min(max,v));
+  }
+  var dangerRaw=((el('cold-danger')||{}).value||'').trim();
+  var danger=dangerRaw===''?null:Math.max(0,Math.min(100,parseInt(dangerRaw)||0));
+  var rule={
+    label:'手動條件',
+    latestMaxFreq:intVal('cold-latest',4,0,20),
+    coldTopPeriods:intVal('cold-top',5,1,5),
+    hotFreqCutoff:intVal('cold-hot',4,1,20),
+    maxMiss:intVal('cold-miss',20,1,80),
+    maxDanger:danger,
+    excludeNeighbor:!!((el('cold-neighbor')||{}).checked),
+    excludeHeatZero:!!((el('cold-heat0')||{}).checked),
+    latestSort:_coldSortPreset(((el('cold-latest-sort')||{}).value)||'heat'),
+    coldSort:_coldSortPreset(((el('cold-cold-sort')||{}).value)||'heat')
+  };
+  try{localStorage.setItem('coldFilterRule_'+key,JSON.stringify(rule));}catch(e){}
+  _coldClearBtCache(key);
+  renderColdFilterPanel(key);
+}
+
+function resetColdRuleSettings(key){
+  try{localStorage.removeItem('coldFilterRule_'+key);}catch(e){}
+  _coldClearBtCache(key);
+  renderColdFilterPanel(key);
+}
+
+function _missRankRule(key){
+  var base={
+    label:'遺漏排行手動',
+    windows:['100','50','30','10'],
+    maxRecentFreq:3,
+    minGroupSize:2,
+    maxDanger:null,
+    excludeLatestInRank:true,
+    excludeNeighborInRank:true,
+    fallbackWithinGroup:true,
+    sort:['heat','danger','freq','miss']
+  };
+  var src={};
+  try{src=JSON.parse(localStorage.getItem('missRankRule_'+key)||'{}')||{};}catch(e){src={};}
+  var out={};
+  Object.keys(base).forEach(function(k){out[k]=base[k];});
+  Object.keys(src).forEach(function(k){out[k]=src[k];});
+  var allowed={'100':true,'50':true,'30':true,'10':true};
+  out.windows=(out.windows||base.windows).filter(function(w){return allowed[w];});
+  if(!out.windows.length)out.windows=base.windows.slice();
+  var order={'100':0,'50':1,'30':2,'10':3};
+  out.windows.sort(function(a,b){return order[a]-order[b];});
+  out.maxRecentFreq=Math.max(0,Math.min(20,parseInt(out.maxRecentFreq)||base.maxRecentFreq));
+  out.minGroupSize=Math.max(1,Math.min(5,parseInt(out.minGroupSize)||base.minGroupSize));
+  if(out.maxDanger===''||out.maxDanger===null||out.maxDanger===undefined){
+    out.maxDanger=null;
+  }else{
+    out.maxDanger=Math.max(0,Math.min(100,parseInt(out.maxDanger)));
+    if(isNaN(out.maxDanger))out.maxDanger=null;
+  }
+  out.excludeLatestInRank=out.excludeLatestInRank!==false;
+  out.excludeNeighborInRank=out.excludeNeighborInRank!==false;
+  out.fallbackWithinGroup=out.fallbackWithinGroup!==false;
+  out.sort=(out.sort||base.sort).slice();
+  return out;
+}
+
+function _missRankClearBtCache(key){
+  Object.keys(_missRankBtCache).forEach(function(k){
+    if(k.indexOf(key+'_')===0)delete _missRankBtCache[k];
+  });
+}
+
+function _missRankRuleSummary(rule){
+  var dangerText=rule.maxDanger===null||rule.maxDanger===undefined?'不設危險上限':'危≤'+rule.maxDanger+'%';
+  return '當期1 + 鄰號1 + 遺漏補3｜視窗 '+rule.windows.join('→')
+    +'｜遺漏群≥'+rule.minGroupSize+'支'
+    +'｜近20≤'+rule.maxRecentFreq
+    +'｜'+dangerText
+    +'｜'+(rule.excludeNeighborInRank?'補號排鄰號':'補號保留鄰號');
+}
+
+function _missRankRuleEditor(key,rule){
+  var dangerVal=rule.maxDanger===null||rule.maxDanger===undefined?'':rule.maxDanger;
+  function checkedWin(w){return rule.windows.indexOf(w)!==-1?'checked':'';}
+  return '<details class="miss-rank-editor">'
+    +'<summary style="cursor:pointer;list-style:none;font-size:.62rem;font-weight:900;color:#c2410c">'
+    +'▶ 手動調整遺漏排行條件</summary>'
+    +'<div class="miss-rank-grid" style="margin-top:.32rem">'
+    +'<label class="miss-rank-field">近20出現上限'
+    +'<input id="mr-freq-'+key+'" type="number" min="0" max="20" step="1" value="'+rule.maxRecentFreq+'"></label>'
+    +'<label class="miss-rank-field">遺漏群最少號碼數'
+    +'<input id="mr-group-'+key+'" type="number" min="1" max="5" step="1" value="'+rule.minGroupSize+'"></label>'
+    +'<label class="miss-rank-field">危險度上限（空白=不限制）'
+    +'<input id="mr-danger-'+key+'" type="number" min="0" max="100" step="1" value="'+dangerVal+'"></label>'
+    +'<label class="miss-rank-field">挑選排序'
+    +_coldSortSelect('mr-sort-'+key,_coldSortPresetValue(rule.sort))+'</label>'
+    +'</div>'
+    +'<div class="miss-rank-checks">'
+    +'<label><input id="mr-w100-'+key+'" type="checkbox" '+checkedWin('100')+'> 100期</label>'
+    +'<label><input id="mr-w50-'+key+'" type="checkbox" '+checkedWin('50')+'> 50期</label>'
+    +'<label><input id="mr-w30-'+key+'" type="checkbox" '+checkedWin('30')+'> 30期</label>'
+    +'<label><input id="mr-w10-'+key+'" type="checkbox" '+checkedWin('10')+'> 10期</label>'
+    +'<label><input id="mr-ex-latest-'+key+'" type="checkbox" '+(rule.excludeLatestInRank?'checked':'')+'> 遺漏補號排除當期號</label>'
+    +'<label><input id="mr-ex-neighbor-'+key+'" type="checkbox" '+(rule.excludeNeighborInRank?'checked':'')+'> 遺漏補號排除鄰號</label>'
+    +'<label><input id="mr-fallback-'+key+'" type="checkbox" '+(rule.fallbackWithinGroup?'checked':'')+'> 群組全剔除時補位</label>'
+    +'</div>'
+    +'<div class="miss-rank-actions">'
+    +'<button class="miss-rank-reset" onclick="resetMissRankRuleSettings(\''+key+'\')">恢復預設</button>'
+    +'<button class="miss-rank-apply" onclick="applyMissRankRuleSettings(\''+key+'\')">套用條件</button>'
+    +'</div>'
+    +'</details>';
+}
+
+function applyMissRankRuleSettings(key){
+  function el(id){return document.getElementById(id+'-'+key);}
+  function intVal(id,def,min,max){
+    var v=parseInt((el(id)||{}).value);
+    if(isNaN(v))v=def;
+    return Math.max(min,Math.min(max,v));
+  }
+  var wins=[];
+  ['100','50','30','10'].forEach(function(w){
+    var box=el('mr-w'+w);
+    if(box&&box.checked)wins.push(w);
+  });
+  if(!wins.length)wins=['100','50','30','10'];
+  var dangerRaw=((el('mr-danger')||{}).value||'').trim();
+  var danger=dangerRaw===''?null:Math.max(0,Math.min(100,parseInt(dangerRaw)||0));
+  var rule={
+    label:'遺漏排行手動',
+    windows:wins,
+    maxRecentFreq:intVal('mr-freq',3,0,20),
+    minGroupSize:intVal('mr-group',2,1,5),
+    maxDanger:danger,
+    excludeLatestInRank:!!((el('mr-ex-latest')||{}).checked),
+    excludeNeighborInRank:!!((el('mr-ex-neighbor')||{}).checked),
+    fallbackWithinGroup:!!((el('mr-fallback')||{}).checked),
+    sort:_coldSortPreset(((el('mr-sort')||{}).value)||'heat')
+  };
+  try{localStorage.setItem('missRankRule_'+key,JSON.stringify(rule));}catch(e){}
+  _missRankClearBtCache(key);
+  renderMissRankFilterPanel(key);
+}
+
+function resetMissRankRuleSettings(key){
+  try{localStorage.removeItem('missRankRule_'+key);}catch(e){}
+  _missRankClearBtCache(key);
+  renderMissRankFilterPanel(key);
+}
+
+function _missRankSelect(rule,latestNums,rankData,nhd,hpd){
+  latestNums=(latestNums||[]).slice();
+  rankData=rankData||{};
+  nhd=nhd||{};
+  hpd=hpd||{};
+  if(!latestNums.length)return null;
+  function ns(n){return(n<10?'0':'')+n;}
+  var lastSet={},neighborSet={};
+  latestNums.forEach(function(n){lastSet[n]=true;});
+  latestNums.forEach(function(n){
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<39&&!lastSet[n+1])neighborSet[n+1]=true;
+  });
+  function getHP(n){
+    var hp=hpd[String(n)];
+    if(hp&&hp.next_hit_rate!==undefined&&hp.next_hit_rate!==null)
+      return {has:true,rate:hp.next_hit_rate};
+    return {has:false,rate:null};
+  }
+  function heatScore(n){
+    var h=getHP(n);
+    if(h.has)return h.rate;
+    var nd=nhd[String(n)]||{};
+    return nd.recent_freq||0;
+  }
+  function dangerPct(n){return (nhd[String(n)]||{}).danger_pct||0;}
+  function recentFreq(n){return (nhd[String(n)]||{}).recent_freq||0;}
+  function curMiss(n){return (nhd[String(n)]||{}).current_miss||0;}
+  var statFns={heat:heatScore,danger:dangerPct,freq:recentFreq,miss:curMiss};
+  function fitSort(a,b){return _coldCompareBy(a,b,rule.sort,statFns);}
+  function qualify(n){
+    if(recentFreq(n)>rule.maxRecentFreq)return false;
+    if(rule.maxDanger!==null&&rule.maxDanger!==undefined&&dangerPct(n)>rule.maxDanger)return false;
+    return true;
+  }
+  var selected=[],used={};
+  function addPick(n,meta,pool,fallback){
+    used[n]=true;
+    var primary=(rule.sort&&rule.sort.length?rule.sort[0]:'heat');
+    var pv=_coldStatValue(n,primary,statFns);
+    var tied=(pool||[]).filter(function(x){return _coldStatValue(x,primary,statFns)===pv;});
+    var source=meta.source||'miss';
+    var label=source==='latest'?'當期代表':(source==='neighbor'?'鄰號代表':'遺漏排行');
+    var reason='';
+    if(source==='latest'){
+      reason='當期代表：從 '+latestNums.map(ns).join('、')+' 中依 '+_coldSortSummary(rule.sort)
+        +' 挑出 '+ns(n)+'（熱'+Math.round(heatScore(n)*10)/10+'%·危'+dangerPct(n)+'%·近20出'+recentFreq(n)+'）';
+    }else if(source==='neighbor'){
+      reason='鄰號代表：從當期鄰號中依 '+_coldSortSummary(rule.sort)
+        +' 挑出 '+ns(n)+'（熱'+Math.round(heatScore(n)*10)/10+'%·危'+dangerPct(n)+'%·近20出'+recentFreq(n)+'）';
+    }else{
+      reason=meta.window+'期遺漏排行第'+meta.rank+'名：遺漏值 '+meta.missValue+' 期，群組 '
+        +(meta.groupNums||[]).map(ns).join('、')
+        +(fallback?'，補位':'')
+        +' → '+ns(n)+'（熱'+Math.round(heatScore(n)*10)/10+'%·危'+dangerPct(n)+'%·近20出'+recentFreq(n)+'）';
+    }
+    selected.push({
+      num:n,
+      order:selected.length+1,
+      source:source,
+      sourceLabel:label,
+      window:meta.window||'',
+      rank:meta.rank||0,
+      missValue:meta.missValue,
+      noShowRate:meta.noShowRate,
+      groupSize:meta.groupSize||0,
+      groupNums:meta.groupNums||[],
+      fallback:!!fallback,
+      heat:heatScore(n),
+      dp:dangerPct(n),
+      recentFreq:recentFreq(n),
+      miss:curMiss(n),
+      tiebreak:tied.length>1,
+      reason:reason
+    });
+  }
+  function pickPool(pool,meta){
+    pool=(pool||[]).filter(function(n){return !used[n];});
+    if(!pool.length)return;
+    var primary=pool.filter(qualify).sort(fitSort);
+    var fallback=false;
+    if(!primary.length){
+      fallback=true;
+      primary=pool.slice().sort(function(a,b){
+        var fa=recentFreq(a)>rule.maxRecentFreq?1:0;
+        var fb=recentFreq(b)>rule.maxRecentFreq?1:0;
+        if(fa!==fb)return fa-fb;
+        return fitSort(a,b);
+      });
+    }
+    if(primary.length)addPick(primary[0],meta,primary,fallback);
+  }
+
+  pickPool(latestNums,{source:'latest'});
+  var neighborNums=Object.keys(neighborSet).map(function(k){return parseInt(k);}).sort(function(a,b){return a-b;});
+  pickPool(neighborNums,{source:'neighbor'});
+
+  for(var wi=0;wi<rule.windows.length&&selected.length<5;wi++){
+    var w=rule.windows[wi];
+    var rows=((rankData[w]||{}).top8_highest_no_show)||[];
+    for(var ri=0;ri<rows.length&&selected.length<5;ri++){
+      var row=rows[ri]||{};
+      var group=(row.matching_numbers||[]).map(function(x){return parseInt(x.number);})
+        .filter(function(n){return !isNaN(n);});
+      if(group.length<rule.minGroupSize)continue;
+      var candidates=group.filter(function(n){
+        if(used[n])return false;
+        if(rule.excludeLatestInRank&&lastSet[n])return false;
+        if(rule.excludeNeighborInRank&&neighborSet[n])return false;
+        return qualify(n);
+      }).sort(fitSort);
+      var fallback=false;
+      if(!candidates.length&&rule.fallbackWithinGroup){
+        fallback=true;
+        candidates=group.filter(function(n){
+          if(used[n])return false;
+          if(rule.excludeLatestInRank&&lastSet[n])return false;
+          if(rule.excludeNeighborInRank&&neighborSet[n])return false;
+          return true;
+        }).sort(function(a,b){
+          var fa=recentFreq(a)>rule.maxRecentFreq?1:0;
+          var fb=recentFreq(b)>rule.maxRecentFreq?1:0;
+          if(fa!==fb)return fa-fb;
+          return fitSort(a,b);
+        });
+      }
+      if(!candidates.length)continue;
+      addPick(candidates[0],{
+        source:'miss',
+        window:w,
+        rank:ri+1,
+        missValue:row.miss_value,
+        noShowRate:row.no_show_rate,
+        groupSize:group.length,
+        groupNums:group
+      },candidates,fallback);
+    }
+  }
+  return selected.length?selected:null;
+}
+
+function computeMissRankFilterRec(key){
+  var rd=(window._RECENT_DATA&&window._RECENT_DATA[key])||[];
+  var latest=rd[0];
+  if(!latest||!latest.numbers||!latest.numbers.length)return null;
+  return _missRankSelect(
+    _missRankRule(key),
+    latest.numbers,
+    (window._MISS_RANK_DATA&&window._MISS_RANK_DATA[key])||{},
+    (window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{},
+    (window._HEAT_PROB_DATA&&window._HEAT_PROB_DATA[key])||{}
+  );
+}
+
+function _missRankBuildSimData(dh,histStart,rule){
+  var poolSize=39;
+  var latestNums=(dh[histStart]&&dh[histStart].numbers)||[];
+  var histDraws=[];
+  for(var j=histStart;j<dh.length;j++)histDraws.push(dh[j].numbers);
+  function currentMiss(n){
+    for(var j=histStart;j<dh.length;j++){
+      if(dh[j].numbers.indexOf(n)!==-1)return j-histStart;
+    }
+    return Math.min(80,dh.length-histStart);
+  }
+  var nhd={},hpd={};
+  for(var n=1;n<=poolSize;n++){
+    var freq=0;
+    for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){
+      if(dh[j].numbers.indexOf(n)!==-1)freq++;
+    }
+    var miss=currentMiss(n);
+    var gaps=[],lastA=-1;
+    for(var j=0;j<Math.min(100,histDraws.length);j++){
+      if(histDraws[j].indexOf(n)!==-1){
+        if(lastA!==-1)gaps.push(j-lastA);
+        lastA=j;
+      }
+    }
+    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
+    nhd[n]={current_miss:miss,recent_freq:freq,danger_pct:Math.min(100,Math.round(miss/Math.max(1,avgGap)*100))};
+    var hits50=0,tot50=Math.min(50,histDraws.length);
+    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
+    hpd[n]={next_hit_rate:tot50?Math.round(hits50/tot50*1000)/10:0};
+  }
+  function missStatsForWindow(w){
+    var slice=dh.slice(histStart,histStart+w).reverse();
+    var miss={},bucket={};
+    for(var n=1;n<=poolSize;n++)miss[n]=0;
+    for(var i=0;i<slice.length-1;i++){
+      var draw=slice[i].numbers,next=slice[i+1].numbers;
+      for(var n=1;n<=poolSize;n++){
+        var mv=miss[n];
+        if(!bucket[mv])bucket[mv]={no_show:0,total:0};
+        bucket[mv].total++;
+        if(next.indexOf(n)===-1)bucket[mv].no_show++;
+      }
+      for(var n=1;n<=poolSize;n++)miss[n]=draw.indexOf(n)!==-1?0:miss[n]+1;
+    }
+    var minS={10:2,30:3,50:5,100:8}[w]||3;
+    var rows=Object.keys(bucket).map(function(k){
+      var b=bucket[k],rate=b.total?Math.round(b.no_show/b.total*10000)/100:0;
+      return {miss_value:parseInt(k),no_show_rate:rate,no_show_count:b.no_show,total_count:b.total};
+    }).filter(function(r){return r.total_count>=minS;})
+      .sort(function(a,b){return b.no_show_rate-a.no_show_rate||a.miss_value-b.miss_value;})
+      .slice(0,8);
+    rows.forEach(function(r){
+      var nums=[];
+      for(var n=1;n<=poolSize;n++){
+        if(nhd[n].current_miss===r.miss_value)nums.push({number:n});
+      }
+      r.matching_numbers=nums;
+    });
+    return {top8_highest_no_show:rows};
+  }
+  var rankData={};
+  rule.windows.forEach(function(w){rankData[w]=missStatsForWindow(parseInt(w));});
+  return {latestNums:latestNums,rankData:rankData,nhd:nhd,hpd:hpd};
+}
+
+function _computeMissRankRecSim(key,dh,histStart){
+  if(histStart>=dh.length)return null;
+  var rule=_missRankRule(key);
+  var sim=_missRankBuildSimData(dh,histStart,rule);
+  return _missRankSelect(rule,sim.latestNums,sim.rankData,sim.nhd,sim.hpd);
+}
+
+function _missRankExactLabel(r){
+  var parts=[r.sourceLabel||r.source||'來源'];
+  if(r.source==='miss')parts.push((r.window||'?')+'期排行'+(r.rank||'?'));
+  if(r.fallback)parts.push('補位');
+  parts.push(_coldBucketLabel(Number(r.heat||0),[9.9,14.9,19.9],['熱<10','熱10~15','熱15~20','熱20+']));
+  parts.push(_coldBucketLabel(Number(r.dp||0),[39,59,79],['危<40','危40~59','危60~79','危80+']));
+  parts.push('近20出'+Number(r.recentFreq||0));
+  return parts.join(' / ');
+}
+
+function _missRankLabels(r){
+  var labels=[r.sourceLabel||r.source||'來源'];
+  if(r.source==='miss')labels.push((r.window||'?')+'期遺漏排行');
+  if(r.fallback)labels.push('群組補位');
+  if(Number(r.recentFreq||0)>=3)labels.push('近20出3次');
+  if(Number(r.heat||0)>=15)labels.push('熱力偏高');
+  if(Number(r.dp||0)>=60)labels.push('危險度偏高');
+  return labels;
+}
+
+function runMissRankBacktest(key,periods){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var rule=_missRankRule(key);
+  var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  var causeAll={},exactHit1={},exactHit2={},numHits={},cases=[];
+  var maxTrials=Math.min(periods,dh.length-2);
+  function add(bucket,label){bucket[label]=(bucket[label]||0)+1;}
+  for(var i=0;i<maxTrials;i++){
+    var actualNums=dh[i].numbers;
+    var simRec=_computeMissRankRecSim(key,dh,i+1);
+    if(!simRec||!simRec.length)continue;
+    total++;
+    var hitRecs=[];
+    simRec.forEach(function(r){if(actualNums.indexOf(r.num)!==-1)hitRecs.push(r);});
+    var hitCount=hitRecs.length;
+    hitSum+=hitCount;
+    if(hitCount===0)wins++;
+    else if(hitCount===1)hits1++;
+    else if(hitCount===2)hits2++;
+    else hits3p++;
+    hitRecs.forEach(function(r){
+      numHits[r.num]=(numHits[r.num]||0)+1;
+      _missRankLabels(r).forEach(function(label){add(causeAll,label);});
+    });
+    if(hitCount===1)add(exactHit1,_missRankExactLabel(hitRecs[0]));
+    if(hitCount>=2)add(exactHit2,hitRecs.slice(0,2).map(_missRankExactLabel).join(' → '));
+    if(hitRecs.length&&cases.length<8){
+      cases.push({date:dh[i].date||'',hitCount:hitCount,hits:hitRecs.map(function(r){
+        return {num:r.num,detail:_missRankExactLabel(r)};
+      })});
+    }
+  }
+  var loss=total-wins;
+  return {
+    rule:rule,total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p,
+    hitSum:hitSum,
+    avgHits:total?Math.round(hitSum/total*100)/100:0,
+    avgLossHits:loss?Math.round(hitSum/loss*100)/100:0,
+    causeAll:causeAll,exactHit1:exactHit1,exactHit2:exactHit2,numHits:numHits,cases:cases
+  };
+}
+
+function switchMissRankBt(key,periods){
+  _missRankBtPeriod[key]=periods;
+  var wrap=document.getElementById('pk-miss-rank-bt-'+key);
+  if(wrap){
+    wrap.querySelectorAll('.miss-rank-bt-tab').forEach(function(t){
+      t.classList.toggle('active',parseInt(t.dataset.p)===periods);
+    });
+  }
+  renderMissRankBacktest(key,periods);
+}
+
+function renderMissRankBacktest(key,periods){
+  var el=document.getElementById('pk-miss-rank-bt-result-'+key);
+  if(!el)return;
+  var cacheKey=key+'_'+periods;
+  var res=_missRankBtCache[cacheKey];
+  if(!res){
+    res=runMissRankBacktest(key,periods);
+    if(res)_missRankBtCache[cacheKey]=res;
+  }
+  if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法回測</span>';return;}
+  var rate=res.total?Math.round(res.wins/res.total*1000)/10:0;
+  var rateC=rate>=60?'#16a34a':rate>=45?'#d97706':'#dc2626';
+  var topCause=_coldTopRows(res.causeAll,Math.max(1,res.hitSum),5);
+  var exact1=_coldTopRows(res.exactHit1,Math.max(1,res.hits1),4);
+  var exact2=_coldTopRows(res.exactHit2,Math.max(1,res.hits2),3);
+  var cases=res.cases.length?'<div class="cold-cause-case"><strong>近期命中案例：</strong><br>'
+    +res.cases.map(function(c){
+      return '<div style="margin-top:.12rem"><strong>'+c.date+'（中'+c.hitCount+'）</strong><br>'
+        +c.hits.map(function(h){var n=h.num<10?'0'+h.num:''+h.num;return '　'+n+'：'+h.detail;}).join('<br>')
+        +'</div>';
+    }).join('')+'</div>':'';
+  el.innerHTML='<div class="cold-bt-result">'
+    +'<div class="cold-bt-win-bar" style="color:'+rateC+'">勝率 <span style="font-size:.75rem">'+rate+'%</span>'
+    +' <span style="font-size:.56rem;color:#64748b;font-weight:400">（勝 '+res.wins+' / 敗 '+(res.total-res.wins)+'，共 '+res.total+' 期）</span></div>'
+    +'<div class="cold-bt-hits">落點分析：'
+    +'<span style="color:#dc2626;font-weight:700">中1顆('+res.hits1+'次)</span> | '
+    +'<span style="color:#c2410c;font-weight:700">中2顆('+res.hits2+'次)</span> | '
+    +'<span style="color:#7c3aed;font-weight:700">中3顆+('+res.hits3p+'次)</span></div>'
+    +'<details class="cold-cause-box" open><summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
+    +'<div style="display:flex;justify-content:flex-end;margin:-.18rem 0 .18rem">'
+    +'<button class="cold-cause-expand miss-rank-expand" onclick="openMissRankCauseModal(\''+key+'\','+periods+')">放大檢視</button>'
+    +'</div>'
+    +'<div style="font-size:.6rem;color:#475569;margin-bottom:.18rem;line-height:1.6">平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。規則：'+_missRankRuleSummary(res.rule)+'</div>'
+    +'<div class="cold-cause-grid"><div class="cold-cause-card"><div class="cold-cause-card-title">命中來源</div>'+topCause+'</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1完整條件</div>'+exact1+'</div></div>'
+    +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">中2完整路徑</div>'+exact2+'</div>'
+    +cases+'</details></div>';
+}
+
+function _missRankCauseModalContent(res){
+  function ns(n){n=parseInt(n);return(n<10?'0':'')+n;}
+  var rate=res.total?Math.round(res.wins/res.total*1000)/10:0;
+  var topCause=_coldTopRows(res.causeAll,Math.max(1,res.hitSum),10);
+  var exact1=_coldTopRows(res.exactHit1,Math.max(1,res.hits1),8);
+  var exact2=_coldTopRows(res.exactHit2,Math.max(1,res.hits2),8);
+  var nums=_coldTopRows(res.numHits,Math.max(1,res.hitSum),10);
+  var cases=(res.cases||[]).length?'<div class="cold-cause-card" style="margin-top:.5rem">'
+    +'<div class="cold-cause-card-title">近期命中案例</div>'
+    +res.cases.slice(0,8).map(function(c){
+      var rows=c.hits.map(function(h){
+        return '<div style="padding:.08rem 0"><strong>'+ns(h.num)+'</strong>：'+h.detail+'</div>';
+      }).join('');
+      return '<div class="cold-cause-case" style="border-top:1px solid rgba(253,186,116,.45);padding-top:.18rem;margin-top:.18rem">'
+        +'<strong>'+c.date+'（中'+c.hitCount+'）</strong>'+rows+'</div>';
+    }).join('')+'</div>':'';
+  return '<div style="font-weight:800;color:#0f172a;margin-bottom:.5rem;line-height:1.75">'
+    +'勝率 '+rate+'%，勝 '+res.wins+' / 敗 '+(res.total-res.wins)+'，共 '+res.total+' 期；'
+    +'平均每期中 '+res.avgHits+' 顆，敗局平均中 '+res.avgLossHits+' 顆。<br>'
+    +'規則：'+_missRankRuleSummary(res.rule)+'</div>'
+    +'<div class="cold-cause-grid">'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">命中來源統計</div>'+topCause+'</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">常命中號碼</div>'+nums+'</div>'
+    +'</div>'
+    +'<div class="cold-cause-card" style="margin-top:.5rem"><div class="cold-cause-card-title">中1完整條件</div>'
+    +'<div style="font-size:.72rem;color:#64748b;margin-bottom:.22rem;line-height:1.65">只中一顆時，這裡列出那一顆的完整來源、視窗、排序條件與熱力危險度。</div>'
+    +exact1+'</div>'
+    +'<div class="cold-cause-card" style="margin-top:.5rem"><div class="cold-cause-card-title">中2完整路徑</div>'
+    +'<div style="font-size:.72rem;color:#64748b;margin-bottom:.22rem;line-height:1.65">中兩顆以上時，這裡列出前兩顆撞到的完整組合，方便你判斷是哪一段條件同時失守。</div>'
+    +exact2+'</div>'
+    +cases;
+}
+
+function openMissRankCauseModal(key,periods){
+  var cacheKey=key+'_'+periods;
+  var res=_missRankBtCache[cacheKey]||runMissRankBacktest(key,periods);
+  if(!res)return;
+  _missRankBtCache[cacheKey]=res;
+  closeMissRankCauseModal();
+  closeColdCauseModal();
+  var html='<div id="miss-rank-cause-modal" class="cold-modal-backdrop" onclick="if(event.target===this)closeMissRankCauseModal()">'
+    +'<div class="cold-modal miss-rank-modal">'
+    +'<div class="cold-modal-head"><div class="cold-modal-title">遺漏排行命中原因放大檢視｜近'+periods+'期</div>'
+    +'<button class="cold-modal-close" onclick="closeMissRankCauseModal()">關閉</button></div>'
+    +'<div class="cold-modal-body">'+_missRankCauseModalContent(res)+'</div>'
+    +'</div></div>';
+  document.body.insertAdjacentHTML('beforeend',html);
+}
+
+function closeMissRankCauseModal(){
+  var el=document.getElementById('miss-rank-cause-modal');
+  if(el)el.remove();
+}
+
+function renderMissRankFilterPanel(key){
+  var el=document.getElementById('pk-miss-rank-rec-'+key);
+  if(!el)return;
+  var rule=_missRankRule(key);
+  var rec=computeMissRankFilterRec(key)||[];
+  function ns(n){return(n<10?'0':'')+n;}
+  var balls=rec.length
+    ?rec.map(function(r){
+      return '<span class="ball-sm '+_clsBall(r.num)+'" style="width:1.65rem;height:1.65rem;font-size:.62rem;cursor:default">'+ns(r.num)+'</span>';
+    }).join('')
+    :'<span style="font-size:.62rem;color:#78716c;font-weight:800">目前條件篩不出號碼，請放寬下方條件</span>';
+  var reasons=rec.length
+    ?rec.map(function(r,i){
+      return '<div style="padding:.1rem 0;border-bottom:1px solid rgba(253,186,116,.35)">'
+        +'<span style="font-weight:800;color:#c2410c">No.'+(i+1)+' </span>'
+        +'<span class="ball-sm '+_clsBall(r.num)+'" style="width:.9rem;height:.9rem;font-size:.42rem;vertical-align:middle">'+ns(r.num)+'</span> '
+        +r.reason+'</div>';
+    }).join('')
+    :'<div style="color:#78716c">目前條件沒有產生可帶入的 5 支號碼。</div>';
+  var nums=rec.map(function(r){return r.num;});
+  var activePeriods=_missRankBtPeriod[key]||30;
+  el.innerHTML='<div class="miss-rank-panel">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
+    +'<span style="font-size:.62rem;font-weight:900;color:#9a3412">📊 遺漏排行篩選推薦｜'+rule.label+'</span>'
+    +(nums.length?'<button onclick="applyMissRankRecToSel(\''+key+'\',['+nums.join(',')+'])" '
+      +'style="font-size:.57rem;padding:.1rem .3rem;border:none;border-radius:.28rem;background:#c2410c;color:#fff;cursor:pointer;font-weight:800;white-space:nowrap">一鍵帶入選號盤</button>'
+      :'<span style="font-size:.57rem;color:#78716c;font-weight:800">無可帶入號碼</span>')
+    +'</div>'
+    +'<div style="font-size:.55rem;color:#9a3412;line-height:1.45;margin:-.02rem 0 .18rem">策略門檻：'+_missRankRuleSummary(rule)+'</div>'
+    +'<div class="miss-rank-balls">'+balls+'</div>'
+    +_missRankRuleEditor(key,rule)
+    +'<details style="margin-top:.06rem">'
+    +'<summary style="font-size:.57rem;color:#c2410c;cursor:pointer;list-style:none;font-weight:700;padding:.05rem 0">▶ 查看推理過程</summary>'
+    +'<div class="miss-rank-reason">'+reasons+'</div>'
+    +'</details>'
+    +'<div class="cold-bt-section" id="pk-miss-rank-bt-'+key+'">'
+    +'<div class="cold-bt-tabs">'
+    +'<span style="font-size:.55rem;color:#9a3412;font-weight:800;margin-right:.1rem">📊 歷史回測：</span>'
+    +'<button class="cold-bt-tab miss-rank-bt-tab'+(activePeriods===30?' active':'')+'" data-p="30" onclick="switchMissRankBt(\''+key+'\',30)">近30期</button>'
+    +'<button class="cold-bt-tab miss-rank-bt-tab'+(activePeriods===50?' active':'')+'" data-p="50" onclick="switchMissRankBt(\''+key+'\',50)">近50期</button>'
+    +'<button class="cold-bt-tab miss-rank-bt-tab'+(activePeriods===100?' active':'')+'" data-p="100" onclick="switchMissRankBt(\''+key+'\',100)">近100期</button>'
+    +'</div><div id="pk-miss-rank-bt-result-'+key+'"></div></div>'
+    +'</div>';
+  renderMissRankBacktest(key,activePeriods);
+}
+
+function applyMissRankRecToSel(key,nums){
+  _pickerSel[key]=nums.slice(0,5);
+  _pickerDraft[key]=[];
+  _pickerStrategySource[key]='miss_rank_filter';
+  _refreshPickerUI(key);
+  renderSelectionRiskSummary(key);
+  renderDraftPanel(key);
+}
 
 function switchColdBt(key,periods){
   _coldBtPeriod[key]=periods;
@@ -3721,6 +4607,33 @@ function renderColdFilterBacktest(key,periods){
   }
   var rate=res.total>0?Math.round(res.wins/res.total*1000)/10:0;
   var rateC=rate>=60?'#16a34a':rate>=45?'#d97706':'#dc2626';
+  var causeHtml=_renderColdCauseAnalysis(key,periods,res);
+  // Trap rate: top-3 numbers with highest hit/rec ratio (min 5 recommendations)
+  var trapHtml='';
+  if(res.numRec){
+    var trapList=Object.keys(res.numRec).map(function(n){
+      var rec=res.numRec[n],hit=res.numHits[n]||0;
+      return{num:parseInt(n),rec:rec,hit:hit,rate:rec>=5?Math.round(hit/rec*100):null};
+    }).filter(function(x){return x.rate!==null&&x.rate>=25;})
+      .sort(function(a,b){return b.rate-a.rate||b.hit-a.hit;}).slice(0,3);
+    if(trapList.length){
+      trapHtml='<div class="trap-section"><span style="font-size:.58rem;font-weight:800;color:#7c2d12">🚨 陷阱號（推薦卻被開出比例偏高）：</span>'
+        +trapList.map(function(x){
+          var ns=x.num<10?'0'+x.num:''+x.num;
+          var c=x.rate>=50?'#dc2626':x.rate>=35?'#c2410c':'#d97706';
+          return '<span class="trap-row" style="display:inline-flex;margin:.06rem .14rem 0 0">'
+            +'<span class="ball-sm '+_clsBall(x.num)+'" style="width:1.1rem;height:1.1rem;font-size:.46rem;flex-shrink:0">'+ns+'</span>'
+            +'<span style="color:'+c+';font-weight:700">'+x.rate+'%</span>'
+            +'<span style="color:#64748b">(推'+x.rec+'次·中'+x.hit+'次)</span>'
+            +'</span>';
+        }).join('')+'</div>';
+    }
+  }
+  var oneHitRate=res.total>0?Math.round(res.hits1/res.total*1000)/10:0;
+  var dirHtml='<div style="margin-top:.1rem;font-size:.56rem;color:#475569">'
+    +'策略方向：<span style="font-weight:700;color:'+(rate>oneHitRate?'#16a34a':'#7e22ce')+'">五不中勝率 '+rate+'%</span>'
+    +' vs <span style="font-weight:700;color:'+(oneHitRate>=rate?'#7e22ce':'#94a3b8')+'">五選中一率 '+oneHitRate+'%</span>'
+    +' — 建議優先打 <strong>'+(rate>=oneHitRate?'五不中':'五選中一')+'</strong></div>';
   el.innerHTML='<div class="cold-bt-result">'
     +'<div class="cold-bt-win-bar" style="color:'+rateC+'">'
     +'勝率 <span style="font-size:.75rem">'+rate+'%</span>'
@@ -3730,34 +4643,305 @@ function renderColdFilterBacktest(key,periods){
     +'<span style="color:#dc2626;font-weight:700">中1顆('+res.hits1+'次)</span> | '
     +'<span style="color:#c2410c;font-weight:700">中2顆('+res.hits2+'次)</span> | '
     +'<span style="color:#7c3aed;font-weight:700">中3顆+('+res.hits3p+'次)</span>'
-    +'</div></div>';
+    +'</div>'+dirHtml+trapHtml+causeHtml+'</div>';
 }
 
 function runColdFilterBacktest(key,periods){
   var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
   if(dh.length<periods+5)return null;
-  var wins=0,hits1=0,hits2=0,hits3p=0;
-  var total=Math.min(periods,dh.length-2);
-  for(var i=0;i<total;i++){
+  var rule=_coldFilterRule(key);
+  var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  var causeAll={},causeHit1={},causeHit2={},causeHit3p={},pairHit2={},numHits={},numRec={},cases=[];
+  var exactHit1={},exactHit2First={},exactHit2Second={},exactPair2={};
+  var maxTrials=Math.min(periods,dh.length-2);
+  function addCause(bucket,label){bucket[label]=(bucket[label]||0)+1;}
+  for(var i=0;i<maxTrials;i++){
     var actualNums=dh[i].numbers;
     var histStart=i+1;
-    var simRec=_computeColdRecSim(dh,histStart);
+    var simRec=_computeColdRecSim(key,dh,histStart);
     if(!simRec||!simRec.length)continue;
-    var hitCount=0;
+    total++;
+    simRec.forEach(function(r){numRec[r.num]=(numRec[r.num]||0)+1;});
+    var hitCount=0,hitRecs=[];
     for(var ri=0;ri<simRec.length;ri++){
-      if(actualNums.indexOf(simRec[ri].num)!==-1)hitCount++;
+      if(actualNums.indexOf(simRec[ri].num)!==-1){
+        hitCount++;
+        hitRecs.push(simRec[ri]);
+      }
     }
+    hitSum+=hitCount;
     if(hitCount===0)wins++;
     else if(hitCount===1)hits1++;
     else if(hitCount===2)hits2++;
     else hits3p++;
+    if(hitRecs.length){
+      var bucket=hitCount===1?causeHit1:(hitCount===2?causeHit2:causeHit3p);
+      hitRecs.forEach(function(r){
+        numHits[r.num]=(numHits[r.num]||0)+1;
+        _coldCauseLabels(r).forEach(function(label){
+          addCause(causeAll,label);
+          addCause(bucket,label);
+        });
+      });
+      if(hitCount===1){
+        addCause(exactHit1,_coldExactLabel(hitRecs[0]));
+      }
+      if(hitCount===2){
+        addCause(pairHit2,_coldPairLabel(hitRecs[0],hitRecs[1]));
+        addCause(exactHit2First,_coldExactLabel(hitRecs[0]));
+        addCause(exactHit2Second,_coldExactLabel(hitRecs[1]));
+        addCause(exactPair2,_coldExactLabel(hitRecs[0])+' → '+_coldExactLabel(hitRecs[1]));
+      }
+      if(cases.length<8){
+        cases.push({
+          date:dh[i].date||'',
+          hitCount:hitCount,
+          hits:hitRecs.map(function(r){
+            return{
+              num:r.num,
+              labels:_coldCauseLabels(r).slice(0,2),
+              exact:_coldExactLabel(r),
+              detail:_coldDetailedLine(r)
+            };
+          })
+        });
+      }
+    }
   }
-  return{total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p};
+  var loss=total-wins;
+  return{
+    total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p,
+    hitSum:hitSum,
+    avgHits:total?Math.round(hitSum/total*100)/100:0,
+    avgLossHits:loss?Math.round(hitSum/loss*100)/100:0,
+    rule:rule,
+    causeAll:causeAll,
+    causeHit1:causeHit1,
+    causeHit2:causeHit2,
+    causeHit3p:causeHit3p,
+    pairHit2:pairHit2,
+    exactHit1:exactHit1,
+    exactHit2First:exactHit2First,
+    exactHit2Second:exactHit2Second,
+    exactPair2:exactPair2,
+    numHits:numHits,
+    numRec:numRec,
+    cases:cases
+  };
 }
 
-function _computeColdRecSim(dh,histStart){
+function _coldBucketLabel(value,bounds,labels){
+  for(var i=0;i<bounds.length;i++){
+    if(value<=bounds[i])return labels[i];
+  }
+  return labels[labels.length-1];
+}
+
+function _coldExactLabel(r){
+  var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
+  var parts=[];
+  if(r.source==='latest')parts.push('當期代表');
+  else if(rank>0)parts.push('冷門排行第'+rank);
+  if(r.fallback)parts.push('補位');
+  parts.push(_coldBucketLabel(dp,[39,59,79],['危<40','危40~59','危60~79','危80+']));
+  parts.push(_coldBucketLabel(heat,[9.9,14.9,19.9],['熱<10','熱10~15','熱15~20','熱20+']));
+  if(freq>=3)parts.push('近20出3+');
+  else parts.push('近20出'+freq);
+  parts.push(_coldBucketLabel(miss,[2,5,10],['漏≤2','漏3~5','漏6~10','漏11+']));
+  if(r.tiebreak)parts.push('平手');
+  return parts.join(' / ');
+}
+
+function _coldDetailedLine(r){
+  var n=r.num<10?'0'+r.num:''+r.num;
+  var rank=Number(r.rank||0),heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),order=Number(r.order||0);
+  var source=r.source==='latest'
+    ?'當期開獎代表'
+    :(rank>0
+    ?'冷門排行第'+rank+'名'
+    :'來源未知');
+  var bits=[
+    '推薦第'+(order||'?')+'顆 '+n,
+    '來源：'+source,
+    '危險度 '+dp+'%',
+    '熱力 '+Math.round(heat*10)/10+'%',
+    '近20期出現 '+freq+' 次',
+    '遺漏 '+miss+' 期'
+  ];
+  if(r.tiebreak)bits.push('第一排序條件平手後用後續條件挑出');
+  return bits.join('｜');
+}
+
+function _coldPrimaryCause(r){
+  var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
+  if(r.source==='latest')return '當期代表';
+  if(r.fallback)return '同期補位';
+  if(rank>0)return '冷門排行第'+rank+'名';
+  if(freq>=3)return '近20期≥3次';
+  if(heat>=15)return '熱力≥15%';
+  if(miss<=5)return '遺漏≤5期';
+  if(dp>=60)return '危險度≥60%';
+  if(r.tiebreak)return '排序平手';
+  return '一般低熱';
+}
+
+function _coldPairLabel(a,b){
+  var x=_coldPrimaryCause(a),y=_coldPrimaryCause(b);
+  var arr=[x,y].sort();
+  return arr[0]+' + '+arr[1];
+}
+
+function _coldCauseLabels(r){
+  var labels=[];
+  var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
+  if(freq>=3)labels.push('近20期出現3次以上');
+  else if(freq===2)labels.push('近20期出現2次');
+  if(heat>=20)labels.push('熱力≥20%');
+  else if(heat>=15)labels.push('熱力15~20%');
+  else if(heat>=10)labels.push('熱力10~15%');
+  if(miss<=2)labels.push('遺漏≤2期');
+  else if(miss<=5)labels.push('遺漏3~5期');
+  if(dp>=80)labels.push('危險度≥80%');
+  else if(dp>=60)labels.push('危險度60~79%');
+  if(r.source==='latest')labels.push('當期代表');
+  else if(rank>0)labels.push('來自冷門排行第'+rank+'名');
+  if(r.fallback)labels.push('同期補位');
+  if(r.tiebreak)labels.push('第一排序條件平手');
+  if(!labels.length)labels.push('無明顯單一條件');
+  return labels;
+}
+
+function _coldTopRows(map,denom,limit){
+  var rows=Object.keys(map||{}).map(function(k){return[k,map[k]];})
+    .sort(function(a,b){return b[1]-a[1];}).slice(0,limit||4);
+  if(!rows.length)return '<div class="cold-cause-row"><span>樣本不足</span><strong>--</strong></div>';
+  return rows.map(function(r){
+    var pct=denom?Math.round(r[1]/denom*100):0;
+    return '<div class="cold-cause-row"><span>'+r[0]+'</span><strong>'+r[1]+'次 · '+pct+'%</strong></div>';
+  }).join('');
+}
+
+function _coldTopNums(map){
+  function ns(n){n=parseInt(n);return(n<10?'0':'')+n;}
+  var rows=Object.keys(map||{}).map(function(k){return[k,map[k]];})
+    .sort(function(a,b){return b[1]-a[1];}).slice(0,5);
+  if(!rows.length)return '';
+  return '<div class="cold-cause-case">常命中號：'
+    +rows.map(function(r){return ns(r[0])+'×'+r[1];}).join('、')+'</div>';
+}
+
+function _coldCauseSuggestions(res){
+  var all=res.causeAll||{},hitSum=Math.max(1,res.hitSum||0),out=[];
+  function share(label){return(all[label]||0)/hitSum;}
+  if(share('近20期出現3次以上')>=.22)out.push('可測試把過熱(C)門檻由近20期≥4次改成≥3次。');
+  if((share('熱力≥20%')+share('熱力15~20%'))>=.28)out.push('可加熱力上限，例如只收熱力低於15%的候選。');
+  if((share('遺漏≤2期')+share('遺漏3~5期'))>=.30)out.push('可避開剛出不久的號碼，例如遺漏需大於5期。');
+  if((share('危險度≥80%')+share('危險度60~79%'))>=.25)out.push('可加危險度上限，例如危險度低於60%才納入。');
+  if(share('同期補位')>=.18)out.push('可檢查冷門前5期是否太常全被剔除，必要時放寬其中一個硬條件。');
+  if(!out.length)out.push('目前命中原因分散，建議先觀察更多期數，不急著調門檻。');
+  return out.slice(0,3);
+}
+
+function _coldCaseDetails(res,limit){
+  var items=(res.cases||[]).slice(0,limit||5);
+  if(!items.length)return '';
+  return '<div class="cold-cause-case"><strong>近期命中案例：</strong><br>'
+    +items.map(function(c){
+      var rows=c.hits.map(function(x){
+        var n=x.num<10?'0'+x.num:''+x.num;
+        return '　'+n+'：'+x.detail;
+      }).join('<br>');
+      return '<div style="margin-top:.16rem"><strong>'+(c.date||'近期')+'（中'+c.hitCount+'）</strong><br>'+rows+'</div>';
+    }).join('')
+    +'</div>';
+}
+
+function _coldPreciseBlock(res,full){
+  var limit=full?8:4;
+  return '<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">精準命中拆解</div>'
+    +'<div style="font-size:.62rem;color:#64748b;line-height:1.6;margin-bottom:.12rem">'
+    +'中2第一顆/第二顆是依推薦選號順序拆解，用來看第二顆通常從哪個條件補撞。</div>'
+    +'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.08rem">中1撞到的完整條件</div>'
+    +_coldTopRows(res.exactHit1,Math.max(1,res.hits1),limit)
+    +'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.18rem">中2第二顆追加條件</div>'
+    +_coldTopRows(res.exactHit2Second,Math.max(1,res.hits2),limit)
+    +'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.18rem">中2完整路徑</div>'
+    +_coldTopRows(res.exactPair2,Math.max(1,res.hits2),full?6:3)
+    +(full?'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.18rem">中2第一顆條件</div>'
+      +_coldTopRows(res.exactHit2First,Math.max(1,res.hits2),limit):'')
+    +'</div>';
+}
+
+function _renderColdCauseAnalysis(key,periods,res){
+  var loss=res.total-res.wins;
+  if(!loss)return '<div class="cold-cause-box"><div class="cold-cause-title">🧪 命中原因分析：近樣本全勝，暫無敗局可拆解</div></div>';
+  var sug=_coldCauseSuggestions(res).map(function(s){return '<div>• '+s+'</div>';}).join('');
+  return '<details class="cold-cause-box" open>'
+    +'<summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
+    +'<div style="display:flex;justify-content:flex-end;margin:-.18rem 0 .18rem">'
+    +'<button class="cold-cause-expand" onclick="openColdCauseModal(\''+key+'\','+periods+')">放大檢視</button>'
+    +'</div>'
+    +'<div style="font-size:.6rem;color:#475569;margin-bottom:.18rem;line-height:1.6">'
+    +'平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。'
+    +'規則：'+_coldRuleSummary(res.rule||_coldFilterRule(key))+'。'
+    +'下方直接拆「中1怎麼撞到」與「中2第二顆怎麼補撞」。</div>'
+    +_coldPreciseBlock(res,false)
+    +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">中2配對結構</div>'
+    +_coldTopRows(res.pairHit2,Math.max(1,res.hits2),5)+'</div>'
+    +_coldTopNums(res.numHits)
+    +_coldCaseDetails(res,3)
+    +'<div class="cold-cause-sug">'+sug+'</div>'
+    +'</details>';
+}
+
+function _coldCauseModalContent(res){
+  var hit1Den=Math.max(1,res.hits1);
+  var hit2Den=Math.max(1,res.hits2*2);
+  var sug=_coldCauseSuggestions(res).map(function(s){return '<div>• '+s+'</div>';}).join('');
+  return '<div style="font-weight:800;color:#0f172a;margin-bottom:.45rem">'
+    +'平均每期中 '+res.avgHits+' 顆；敗局平均中 '+res.avgLossHits+' 顆。規則：'
+    +_coldRuleSummary(res.rule||_coldFilterRule(''))+'</div>'
+    +_coldPreciseBlock(res,true)
+    +'<div class="cold-cause-card" style="margin-top:.5rem"><div class="cold-cause-card-title">中2配對結構</div>'
+    +_coldTopRows(res.pairHit2,Math.max(1,res.hits2),8)+'</div>'
+    +_coldCaseDetails(res,8)
+    +'<div class="cold-cause-grid" style="margin-top:.5rem">'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">逐顆統計：中1命中號</div>'
+    +_coldTopRows(res.causeHit1,hit1Den,6)+'</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">逐顆統計：中2命中號</div>'
+    +_coldTopRows(res.causeHit2,hit2Den,6)+'</div>'
+    +'</div>'
+    +'<div class="cold-cause-sug">'+sug+'</div>';
+}
+
+function openColdCauseModal(key,periods){
+  var cacheKey=key+'_'+periods;
+  var res=_coldBtCache[cacheKey]||runColdFilterBacktest(key,periods);
+  if(!res)return;
+  _coldBtCache[cacheKey]=res;
+  closeColdCauseModal();
+  var html='<div id="cold-cause-modal" class="cold-modal-backdrop" onclick="if(event.target===this)closeColdCauseModal()">'
+    +'<div class="cold-modal">'
+    +'<div class="cold-modal-head"><div class="cold-modal-title">命中原因放大檢視｜近'+periods+'期</div>'
+    +'<button class="cold-modal-close" onclick="closeColdCauseModal()">關閉</button></div>'
+    +'<div class="cold-modal-body">'+_coldCauseModalContent(res)+'</div>'
+    +'</div></div>';
+  document.body.insertAdjacentHTML('beforeend',html);
+}
+
+function closeColdCauseModal(){
+  var el=document.getElementById('cold-cause-modal');
+  if(el)el.remove();
+}
+
+function _computeColdRecSim(key,dh,histStart){
   if(histStart>=dh.length)return null;
   var poolSize=39;
+  var rule=_coldFilterRule(key);
   /* ── Simulated PERIOD_DATA ─────────────────────────────────
      Pick 8 draws from history (histStart+1 … histStart+50) that
      share the fewest numbers with the recent 8 draws (lowest overlap). */
@@ -3769,7 +4953,7 @@ function _computeColdRecSim(dh,histStart){
   for(var j=histStart+1;j<Math.min(histStart+51,dh.length);j++){
     var ov=0;
     for(var k=0;k<dh[j].numbers.length;k++){if(recentSet[dh[j].numbers[k]])ov++;}
-    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov});
+    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov,ref_date:dh[j].date||''});
   }
   periodCands.sort(function(a,b){return a.overlap-b.overlap;});
   var simPD=periodCands.slice(0,8);
@@ -3783,7 +4967,7 @@ function _computeColdRecSim(dh,histStart){
     if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
     if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
   }
-  /* ── Per-number statistics from histStart+1 onward ───────── */
+  /* ── Per-number statistics up to the simulated baseline draw ── */
   var histEnd=Math.min(histStart+101,dh.length);
   var histDraws=[];
   for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
@@ -3791,14 +4975,18 @@ function _computeColdRecSim(dh,histStart){
   for(var n=1;n<=poolSize;n++){
     /* current_miss */
     var miss=0;
-    for(var j=histStart+1;j<dh.length;j++){
-      if(dh[j].numbers.indexOf(n)!==-1)break;
-      miss++;if(miss>50)break;
+    if(latestNums.indexOf(n)!==-1){
+      miss=0;
+    }else{
+      for(var j=histStart+1;j<dh.length;j++){
+        if(dh[j].numbers.indexOf(n)!==-1)break;
+        miss++;if(miss>50)break;
+      }
     }
-    /* recent_freq (last 20 draws) */
+    /* recent_freq (last 20 draws, including baseline) */
     var freq=0;
-    for(var j=0;j<Math.min(20,histDraws.length);j++){
-      if(histDraws[j].indexOf(n)!==-1)freq++;
+    for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){
+      if(dh[j].numbers.indexOf(n)!==-1)freq++;
     }
     /* avg_gap */
     var gaps=[],lastA=-1;
@@ -3815,35 +5003,113 @@ function _computeColdRecSim(dh,histStart){
     var hits50=0,tot50=Math.min(50,histDraws.length);
     for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
     simHPD[n]={next_hit_rate:tot50>0?Math.round(hits50/tot50*1000)/10:0};
-    if(freq>=4)hotSet[n]=true;
+    if(freq>=rule.hotFreqCutoff)hotSet[n]=true;
   }
   /* ── Cold-filter algorithm (mirrors computeColdFilterRec) ── */
   function getHP(n){var hp=simHPD[n];return hp?{has:true,rate:hp.next_hit_rate}:{has:false,rate:null};}
   function hs(n){var h=getHP(n);if(h.has)return h.rate;return simNHD[n]?(simNHD[n].recent_freq||0):0;}
   function dp2(n){return simNHD[n]?(simNHD[n].danger_pct||0):0;}
   function cm(n){return simNHD[n]?(simNHD[n].current_miss||0):0;}
+  function rf(n){return simNHD[n]?(simNHD[n].recent_freq||0):0;}
+  function fitSort(a,b){
+    return _coldCompareBy(a,b,rule.coldSort,{heat:hs,danger:dp2,freq:rf,miss:cm});
+  }
+  function latestSort(a,b){
+    return _coldCompareBy(a,b,rule.latestSort,{heat:hs,danger:dp2,freq:rf,miss:cm});
+  }
+  function addPick(n,rank,meta){
+    var orderList=(meta&&meta.source==='latest')?rule.latestSort:rule.coldSort;
+    var statFns={heat:hs,danger:dp2,freq:rf,miss:cm};
+    var primary=orderList&&orderList.length?orderList[0]:'heat';
+    var primaryValue=_coldStatValue(n,primary,statFns);
+    var tied=(meta&&meta.pool?meta.pool:[]).filter(function(x){
+      return _coldStatValue(x,primary,statFns)===primaryValue;
+    });
+    usedNums[n]=true;
+    selected.push({
+      num:n,
+      order:selected.length+1,
+      pi:rank>0?rank-1:-1,
+      rank:rank,
+      source:meta&&meta.source||'cold',
+      fallback:!!(meta&&meta.fallback),
+      fallbackReason:meta&&meta.fallbackReason||'',
+      refDate:meta&&meta.refDate||'',
+      overlap:meta&&meta.overlap,
+      heat:hs(n),
+      dp:dp2(n),
+      miss:cm(n),
+      recentFreq:simNHD[n]?(simNHD[n].recent_freq||0):0,
+      tiebreak:tied.length>1
+    });
+  }
   var selected=[],usedNums={};
-  for(var pi=0;pi<simPD.length&&selected.length<5;pi++){
-    var cands=(simPD[pi].ref_numbers||[]).slice();
+  var latestPool=latestNums.filter(function(n){
+    return rf(n)<=rule.latestMaxFreq;
+  }).sort(latestSort);
+  var latestFallback=false;
+  if(!latestPool.length){
+    latestFallback=true;
+    latestPool=latestNums.slice().sort(function(a,b){
+      var fa=rf(a),fb=rf(b);
+      if(fa!==fb)return fa-fb;
+      return latestSort(a,b);
+    });
+  }
+  if(latestPool.length){
+    addPick(latestPool[0],0,{
+      source:'latest',
+      pool:latestPool,
+      fallback:latestFallback,
+      fallbackReason:latestFallback?'當期五碼近20期皆大於'+rule.latestMaxFreq+'次，改取相對最低':''
+    });
+  }
+  var simTopPeriods=simPD.slice(0,rule.coldTopPeriods);
+  for(var pi=0;pi<simTopPeriods.length&&selected.length<5;pi++){
+    var cands=(simTopPeriods[pi].ref_numbers||[]).slice();
     var remaining=[];
     for(var ci=0;ci<cands.length;ci++){
       var cn=cands[ci];
-      if(lastSet[cn]||neighborSet[cn]||hotSet[cn])continue;
-      if(cm(cn)>20)continue;
+      if(lastSet[cn])continue;
+      if(rule.excludeNeighbor&&neighborSet[cn])continue;
+      if(hotSet[cn])continue;
+      if(cm(cn)>rule.maxMiss)continue;
+      if(rule.maxDanger!==null&&rule.maxDanger!==undefined&&dp2(cn)>rule.maxDanger)continue;
       var hp=getHP(cn);
-      if(hp.has&&hp.rate===0)continue;
+      if(rule.excludeHeatZero&&hp.has&&hp.rate===0)continue;
       if(usedNums[cn])continue;
       remaining.push(cn);
     }
+    var fallback=false,fallbackReason='';
+    if(!remaining.length){
+      fallback=true;
+      fallbackReason='本期五碼全被冷門硬條件剔除，改取同一期相對最低風險';
+      remaining=cands.filter(function(n){return !lastSet[n]&&!usedNums[n];}).sort(function(a,b){
+        function penalty(x){
+          var hp=getHP(x),p=0;
+          if(rule.excludeNeighbor&&neighborSet[x])p+=1;
+          if(hotSet[x])p+=2;
+          if(cm(x)>rule.maxMiss)p+=2;
+          if(rule.maxDanger!==null&&rule.maxDanger!==undefined&&dp2(x)>rule.maxDanger)p+=2;
+          if(rule.excludeHeatZero&&hp.has&&hp.rate===0)p+=2;
+          return p;
+        }
+        var pa=penalty(a),pb=penalty(b);
+        if(pa!==pb)return pa-pb;
+        return fitSort(a,b);
+      });
+    }else{
+      remaining.sort(fitSort);
+    }
     if(!remaining.length)continue;
-    remaining.sort(function(a,b){
-      var ha=hs(a),hb=hs(b);
-      if(ha!==hb)return ha-hb;
-      return dp2(a)-dp2(b);
+    addPick(remaining[0],pi+1,{
+      source:'cold',
+      pool:remaining,
+      fallback:fallback,
+      fallbackReason:fallbackReason,
+      refDate:simTopPeriods[pi].ref_date||'',
+      overlap:simTopPeriods[pi].overlap
     });
-    var chosen=remaining[0];
-    usedNums[chosen]=true;
-    selected.push({num:chosen});
   }
   return selected.length?selected:null;
 }
@@ -3855,6 +5121,7 @@ function computeColdFilterRec(key){
   var nhd=(window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{};
   var hpd=(window._HEAT_PROB_DATA&&window._HEAT_PROB_DATA[key])||{};
   if(!pd.length||!rd.length)return null;
+  var rule=_coldFilterRule(key);
   var latest=rd[0];
   if(!latest||!latest.numbers||!latest.numbers.length)return null;
   var latestNums=latest.numbers;
@@ -3870,7 +5137,7 @@ function computeColdFilterRec(key){
   var hotSet={};
   Object.keys(nhd).forEach(function(k){
     var nd=nhd[k];
-    if(nd&&(nd.recent_freq||0)>=4)hotSet[parseInt(k)]=true;
+    if(nd&&(nd.recent_freq||0)>=rule.hotFreqCutoff)hotSet[parseInt(k)]=true;
   });
 
   // ── Per-number helpers ──────────────────────────────────────
@@ -3895,42 +5162,33 @@ function computeColdFilterRec(key){
     var nd=nhd[String(n)];
     return nd?(nd.current_miss||0):0;
   }
+  function recentFreq(n){
+    var nd=nhd[String(n)];
+    return nd?(nd.recent_freq||0):0;
+  }
   function ns(n){return(n<10?'0':'')+n;}
 
-  var selected=[];
-  var usedNums={};
-
-  for(var pi=0;pi<pd.length&&selected.length<5;pi++){
-    var period=pd[pi];
-    var cands=(period.ref_numbers||[]).slice();
-    if(!cands.length)continue;
-
-    var blocked=[];
-    var remaining=[];
-    cands.forEach(function(n){
-      var reason=null;
-      var hp=getHP(n);
-      var cm=curMiss(n);
-      if(lastSet[n])                   reason='當期號(A)';
-      else if(neighborSet[n])          reason='鄰號(B)';
-      else if(hotSet[n])               reason='過熱(C)';
-      else if(cm>20)                   reason='超冷死棋(D，遺漏'+cm+'期)';
-      else if(hp.has&&hp.rate===0)     reason='熱力0%(E)';
-      else if(usedNums[n])             reason='已選';
-      if(reason)blocked.push({n:n,reason:reason});
-      else remaining.push(n);
-    });
-    if(!remaining.length)continue;
-
-    // ── Sort: primary = heatScore ASC；tiebreak = dangerPct ASC ──
-    remaining.sort(function(a,b){
-      var ha=heatScore(a),hb=heatScore(b);
-      if(ha!==hb)return ha-hb;
-      return dangerPct(a)-dangerPct(b);
-    });
-    var chosen=remaining[0];
+  function fitSort(a,b){
+      return _coldCompareBy(a,b,rule.coldSort,{
+        heat:heatScore,danger:dangerPct,freq:recentFreq,miss:curMiss
+      });
+  }
+  function latestSort(a,b){
+      return _coldCompareBy(a,b,rule.latestSort,{
+        heat:heatScore,danger:dangerPct,freq:recentFreq,miss:curMiss
+      });
+  }
+  function fallbackPenalty(n){
+    var hp=getHP(n),p=0;
+    if(rule.excludeNeighbor&&neighborSet[n])p+=1;
+    if(hotSet[n])p+=2;
+    if(curMiss(n)>rule.maxMiss)p+=2;
+    if(rule.maxDanger!==null&&rule.maxDanger!==undefined&&dangerPct(n)>rule.maxDanger)p+=2;
+    if(rule.excludeHeatZero&&hp.has&&hp.rate===0)p+=2;
+    return p;
+  }
+  function addSelected(chosen,period,pi,remaining,blocked,source,fallback,fallbackReason){
     usedNums[chosen]=true;
-
     var heat=heatScore(chosen);
     var dp=dangerPct(chosen);
     var heatStr='熱力'+Math.round(heat*10)/10+'%';
@@ -3943,59 +5201,506 @@ function computeColdFilterRec(key){
 
     // ── Tiebreak detection ──────────────────────────────────────
     var tiebreakText='';
-    var tiedNums=remaining.filter(function(n){return heatScore(n)===heat;});
+    var orderList=source==='latest'?rule.latestSort:rule.coldSort;
+    var primary=orderList&&orderList.length?orderList[0]:'heat';
+    var statFns={heat:heatScore,danger:dangerPct,freq:recentFreq,miss:curMiss};
+    var primaryValue=_coldStatValue(chosen,primary,statFns);
+    var tiedNums=remaining.filter(function(n){
+      return _coldStatValue(n,primary,statFns)===primaryValue;
+    });
     if(tiedNums.length>1){
       var tbList=tiedNums.map(function(n){
         return ns(n)+'（熱力'+Math.round(heatScore(n)*10)/10+'%·危險度'+dangerPct(n)+'%）';
       }).join(' vs ');
-      tiebreakText='，熱力同為'+heatStr+'，比對危險度：'+tbList
-        +'，'+ns(chosen)+'危'+dp+'% 最低';
+      tiebreakText='，'+_coldMetricLabel(primary)+'平手，依後續排序：'+tbList;
     }
 
-    var fullReason='冷門第'+(pi+1)+'期 t'+period.t+'（'+period.ref_date+'）'
-      +'，剔除：'+blockedStr
-      +'，餘：'+remStr
-      +(tiebreakText||'，'+heatStr+'最低')
-      +' → 精選 '+ns(chosen);
+    var fullReason='';
+    if(source==='latest'){
+      var nd=nhd[String(chosen)]||{};
+      fullReason='當期代表：從當期開獎五碼中挑選，近20期出現 '
+        +(nd.recent_freq||0)+' 次，排序 '+_coldSortSummary(rule.latestSort)
+        +'，熱力 '+Math.round(heat*10)/10+'%，危險度 '+dp+'%'
+        +(fallback?'；'+fallbackReason:'')
+        +' → 精選 '+ns(chosen);
+    }else{
+      fullReason='冷門排行第'+(pi+1)+'期 t'+period.t+'（'+period.ref_date+'）'
+        +(fallback?'，補位：'+fallbackReason:'')
+        +'，剔除：'+blockedStr
+        +'，餘：'+remStr
+        +(tiebreakText||'，排序 '+_coldSortSummary(rule.coldSort))
+        +' → 精選 '+ns(chosen);
+    }
 
     selected.push({
-      num:chosen,pi:pi,t:period.t,date:period.ref_date,
+      num:chosen,pi:pi,t:period?period.t:null,date:period?period.ref_date:'',
+      order:selected.length+1,
+      rank:source==='latest'?0:pi+1,source:source,
+      fallback:!!fallback,fallbackReason:fallbackReason||'',
       blocked:blocked,remaining:remaining,
-      heat:heat,dp:dp,tiebreak:(tiedNums.length>1),
+      heat:heat,dp:dp,
+      miss:curMiss(chosen),
+      recentFreq:(nhd[String(chosen)]||{}).recent_freq||0,
+      tiebreak:(tiedNums.length>1),
       reason:fullReason
     });
   }
+  var selected=[];
+  var usedNums={};
+
+  var latestPool=latestNums.filter(function(n){
+    return recentFreq(n)<=rule.latestMaxFreq;
+  }).sort(latestSort);
+  var latestFallback=false;
+  if(!latestPool.length){
+    latestFallback=true;
+    latestPool=latestNums.slice().sort(function(a,b){
+      var fa=recentFreq(a);
+      var fb=recentFreq(b);
+      if(fa!==fb)return fa-fb;
+      return latestSort(a,b);
+    });
+  }
+  if(latestPool.length){
+    addSelected(
+      latestPool[0],
+      null,
+      -1,
+      latestPool,
+      [],
+      'latest',
+      latestFallback,
+      latestFallback?'當期五碼近20期皆大於'+rule.latestMaxFreq+'次，改取相對最低':''
+    );
+  }
+
+  var topPeriods=pd.slice(0,rule.coldTopPeriods);
+  for(var pi=0;pi<topPeriods.length&&selected.length<5;pi++){
+    var period=topPeriods[pi];
+    var cands=(period.ref_numbers||[]).slice();
+    if(!cands.length)continue;
+
+    var blocked=[];
+    var remaining=[];
+    cands.forEach(function(n){
+      var reason=null;
+      var hp=getHP(n);
+      var cm=curMiss(n);
+      if(lastSet[n])                   reason='當期號(A)';
+      else if(rule.excludeNeighbor&&neighborSet[n]) reason='鄰號(B)';
+      else if(hotSet[n])               reason='過熱(C，近20≥'+rule.hotFreqCutoff+'次)';
+      else if(cm>rule.maxMiss)         reason='超冷死棋(D，遺漏'+cm+'期)';
+      else if(rule.maxDanger!==null&&rule.maxDanger!==undefined&&dangerPct(n)>rule.maxDanger)
+                                      reason='高危險度(危'+dangerPct(n)+'%)';
+      else if(rule.excludeHeatZero&&hp.has&&hp.rate===0) reason='熱力0%(E)';
+      else if(usedNums[n])             reason='已選';
+      if(reason)blocked.push({n:n,reason:reason});
+      else remaining.push(n);
+    });
+    var fallback=false,fallbackReason='';
+    if(!remaining.length){
+      fallback=true;
+      fallbackReason='本期五碼全被硬條件剔除，改取同一期相對最低風險';
+      remaining=cands.filter(function(n){return !lastSet[n]&&!usedNums[n];});
+      remaining.sort(function(a,b){
+        var pa=fallbackPenalty(a),pb=fallbackPenalty(b);
+        if(pa!==pb)return pa-pb;
+        return fitSort(a,b);
+      });
+    }else{
+      remaining.sort(fitSort);
+    }
+    if(!remaining.length)continue;
+    addSelected(remaining[0],period,pi,remaining,blocked,'cold',fallback,fallbackReason);
+  }
   return selected.length?selected:null;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   v13 優化模組：連敗警報 / 共識面板 / 自適應參數 / 五選中一模式
+   所有回測均採走前驗證，對每個預測期 T 僅使用 T 之前的歷史資料
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ① 連敗警報：檢查最近 N 期是否連續命中（五不中連敗） */
+function computeStreakAlert(key){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<4)return 0;
+  var streak=0;
+  for(var i=0;i<Math.min(6,dh.length-1);i++){
+    var simRec=_computeColdRecSim(key,dh,i+1);
+    if(!simRec||!simRec.length)break;
+    var actual=dh[i].numbers;
+    var hit=false;
+    for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1){hit=true;break;}}
+    if(hit)streak++;
+    else break;
+  }
+  return streak;
+}
+
+/* ② 雙策略共識面板：對比 冷門 vs 遺漏排行 的推薦交集與分歧 */
+function renderConsensusPanel(key){
+  var el=document.getElementById('pk-consensus-'+key);
+  if(!el)return;
+  var coldRec=computeColdFilterRec(key)||[];
+  var missRec=computeMissRankFilterRec(key)||[];
+  if(!coldRec.length&&!missRec.length){el.innerHTML='';return;}
+  var coldSet={},missSet={};
+  function ns(n){return(n<10?'0':'')+n;}
+  coldRec.forEach(function(r){coldSet[r.num]=true;});
+  missRec.forEach(function(r){missSet[r.num]=true;});
+  var both=[],coldOnly=[],missOnly=[];
+  Object.keys(coldSet).forEach(function(n){n=parseInt(n);(missSet[n]?both:coldOnly).push(n);});
+  Object.keys(missSet).forEach(function(n){n=parseInt(n);if(!coldSet[n])missOnly.push(n);});
+  function ball(n,label){
+    return '<span title="'+label+'" class="ball-sm '+_clsBall(n)+'" style="width:1.3rem;height:1.3rem;font-size:.52rem;cursor:default">'+ns(n)+'</span>';
+  }
+  var html='<div class="consensus-panel">';
+  if(both.length){
+    html+='<div><span style="font-weight:800;color:#15803d">共識安全號（兩套均推薦）：</span>';
+    html+=both.map(function(n){return ball(n,'共識');}).join(' ')+'</div>';
+  }
+  if(coldOnly.length||missOnly.length){
+    html+='<div style="margin-top:.12rem">';
+    if(coldOnly.length){html+='<span style="font-weight:700;color:#0369a1">冷門獨推：</span>'+coldOnly.map(function(n){return ball(n,'冷門獨推');}).join(' ')+'　';}
+    if(missOnly.length){html+='<span style="font-weight:700;color:#c2410c">遺漏獨推：</span>'+missOnly.map(function(n){return ball(n,'遺漏獨推');}).join(' ');}
+    html+='</div>';
+    html+='<div style="margin-top:.1rem;font-size:.54rem;color:#475569">共識號 = 優先五不中；分歧號 = 可考慮作五選中一主力號</div>';
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+/* ③ 自適應參數掃描：走前驗證，絕不讀取未來號碼 */
+/* _computeColdRecSimWithParams: 與 _computeColdRecSim 邏輯完全相同，
+   但改用傳入的 params 物件，不從 localStorage 讀規則，徹底隔絕未來資料 */
+function _computeColdRecSimWithParams(dh,histStart,params){
+  if(histStart>=dh.length)return null;
+  var poolSize=39;
+  var maxMiss=params.maxMiss||20,hotFreqCutoff=params.hotFreqCutoff||4;
+  var excludeNeighbor=params.excludeNeighbor!==false;
+  var recentSet={};
+  for(var j=histStart;j<Math.min(histStart+8,dh.length);j++){
+    for(var k=0;k<dh[j].numbers.length;k++)recentSet[dh[j].numbers[k]]=true;
+  }
+  var periodCands=[];
+  for(var j=histStart+1;j<Math.min(histStart+51,dh.length);j++){
+    var ov=0;for(var k=0;k<dh[j].numbers.length;k++){if(recentSet[dh[j].numbers[k]])ov++;}
+    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov});
+  }
+  periodCands.sort(function(a,b){return a.overlap-b.overlap;});
+  var simPD=periodCands.slice(0,8);
+  var latestNums=dh[histStart].numbers;
+  var lastSet={},neighborSet={};
+  for(var k=0;k<latestNums.length;k++){
+    lastSet[latestNums[k]]=true;
+    var n=latestNums[k];
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
+  }
+  var histEnd=Math.min(histStart+101,dh.length);
+  var histDraws=[];for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
+  var simNHD={},simHPD={},hotSet={};
+  for(var n=1;n<=poolSize;n++){
+    var miss=0;
+    if(latestNums.indexOf(n)!==-1){miss=0;}
+    else{for(var j=histStart+1;j<dh.length;j++){if(dh[j].numbers.indexOf(n)!==-1)break;miss++;if(miss>50)break;}}
+    var freq=0;for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){if(dh[j].numbers.indexOf(n)!==-1)freq++;}
+    var gaps=[],lastA=-1;
+    for(var j=0;j<histDraws.length;j++){
+      if(histDraws[j].indexOf(n)!==-1){if(lastA!==-1)gaps.push(j-lastA);lastA=j;}
+    }
+    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
+    simNHD[n]={current_miss:miss,recent_freq:freq,danger_pct:Math.min(100,Math.round(miss/Math.max(1,avgGap)*100)),avg_gap:avgGap};
+    var hits50=0,tot50=Math.min(50,histDraws.length);
+    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
+    simHPD[n]={next_hit_rate:tot50?Math.round(hits50/tot50*1000)/10:0};
+    if(freq>=hotFreqCutoff)hotSet[n]=true;
+  }
+  function hs(n){var hp=simHPD[n];return hp?hp.next_hit_rate:(simNHD[n]?simNHD[n].recent_freq:0);}
+  function dp2(n){return simNHD[n]?simNHD[n].danger_pct:0;}
+  function cm(n){return simNHD[n]?simNHD[n].current_miss:0;}
+  var selected=[],usedNums={};
+  for(var pi=0;pi<Math.min(8,simPD.length)&&selected.length<5;pi++){
+    var cands=(simPD[pi].ref_numbers||[]).slice();
+    var remaining=cands.filter(function(n){
+      if(lastSet[n])return false;
+      if(excludeNeighbor&&neighborSet[n])return false;
+      if(hotSet[n])return false;
+      if(cm(n)>maxMiss)return false;
+      if(usedNums[n])return false;
+      return true;
+    });
+    if(!remaining.length)remaining=cands.filter(function(n){return !lastSet[n]&&!usedNums[n];});
+    if(!remaining.length)continue;
+    remaining.sort(function(a,b){var ha=hs(a),hb=hs(b);if(ha!==hb)return ha-hb;return dp2(a)-dp2(b);});
+    usedNums[remaining[0]]=true;
+    selected.push({num:remaining[0]});
+  }
+  return selected.length?selected:null;
+}
+
+var _autoParamCache={};
+function _autoParamScan(key,periods){
+  /* 走前驗證：每期預測只用該期「之前」的歷史，絕無未來資料 */
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var grid=[];
+  [10,15,20,25,30].forEach(function(mm){
+    [3,4,5].forEach(function(hf){grid.push({maxMiss:mm,hotFreqCutoff:hf});});
+  });
+  var best=null,bestRate=-1;
+  var maxTrials=Math.min(periods,dh.length-2);
+  grid.forEach(function(params){
+    var wins=0,total=0;
+    for(var i=0;i<maxTrials;i++){
+      var simRec=_computeColdRecSimWithParams(dh,i+1,params);
+      if(!simRec||!simRec.length)continue;
+      total++;
+      var actual=dh[i].numbers,hit=0;
+      for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1)hit++;}
+      if(hit===0)wins++;
+    }
+    if(total<10)return;
+    var rate=wins/total;
+    if(rate>bestRate){bestRate=rate;best={params:params,wins:wins,total:total,rate:rate};}
+  });
+  return best;
+}
+function applyParamSuggestion(key,mm,hf){
+  var rule=_coldFilterRule(key);rule.maxMiss=mm;rule.hotFreqCutoff=hf;
+  try{localStorage.setItem('coldFilterRule_'+key,JSON.stringify(rule));}catch(e){}
+  _coldClearBtCache(key);delete _autoParamCache[key+'_50'];
+  renderColdFilterPanel(key);
+}
+function renderAutoParamSuggestion(key){
+  var el=document.getElementById('pk-param-scan-'+key);
+  if(!el)return;
+  el.innerHTML='<span style="color:#475569;font-size:.57rem">掃描中（15組參數×近50期走前驗證）…</span>';
+  setTimeout(function(){
+    var cacheKey=key+'_50';
+    var res=_autoParamCache[cacheKey];
+    if(!res){res=_autoParamScan(key,50);if(res)_autoParamCache[cacheKey]=res;}
+    if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法掃描</span>';return;}
+    var rule=_coldFilterRule(key);
+    var rate=Math.round(res.rate*1000)/10;
+    var rateC=rate>=55?'#16a34a':rate>=48?'#d97706':'#dc2626';
+    var changed=(res.params.maxMiss!==rule.maxMiss||res.params.hotFreqCutoff!==rule.hotFreqCutoff);
+    el.innerHTML='<div class="param-scan-result">'
+      +'<div style="font-weight:800;color:'+rateC+'">最優建議：遺漏上限 <strong>'+res.params.maxMiss+'</strong> 期｜過熱頻次 ≥<strong>'+res.params.hotFreqCutoff+'</strong> 次 → 勝率 '+rate+'%（'+res.wins+'/'+res.total+'期）</div>'
+      +'<div style="color:#475569;margin-top:.07rem;font-size:.54rem">'+(changed?'目前設定與最優不同':'目前設定已與最優相符')+'（純走前驗證，每期預測僅用該期之前的歷史資料）</div>'
+      +(changed?'<button onclick="applyParamSuggestion(\''+key+'\','+res.params.maxMiss+','+res.params.hotFreqCutoff+')" '
+        +'style="margin-top:.15rem;font-size:.56rem;padding:.1rem .28rem;border:none;border-radius:.25rem;background:#0369a1;color:#fff;cursor:pointer;font-weight:700">套用建議參數</button>':'')
+      +'</div>';
+  },0);
+}
+
+/* ④ 五選中一推薦模式：主力號（準到期）+ 護盾號（超冷）*/
+var _oneHitBtCache={};
+function computeOneHitMode(key){
+  var nhd=(window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{};
+  var hpd=(window._HEAT_PROB_DATA&&window._HEAT_PROB_DATA[key])||{};
+  var rd=(window._RECENT_DATA&&window._RECENT_DATA[key])||[];
+  if(!rd.length)return null;
+  var latest=rd[0];
+  if(!latest||!latest.numbers||!latest.numbers.length)return null;
+  var latestNums=latest.numbers;
+  var lastSet={},neighborSet={};
+  latestNums.forEach(function(n){lastSet[n]=true;});
+  latestNums.forEach(function(n){
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<39&&!lastSet[n+1])neighborSet[n+1]=true;
+  });
+  var coldRec=computeColdFilterRec(key)||[];
+  var shieldNums=coldRec.slice(0,4).map(function(r){return r.num;});
+  var shieldSet={};shieldNums.forEach(function(n){shieldSet[n]=true;});
+  var candidates=[];
+  for(var n=1;n<=39;n++){
+    if(lastSet[n]||neighborSet[n]||shieldSet[n])continue;
+    var nd=nhd[String(n)]||nhd[n]||{};
+    var hp=hpd[String(n)]||{};
+    var miss=nd.current_miss||0,avgGap=nd.avg_gap||8;
+    var ratio=miss/Math.max(1,avgGap);
+    var heat=hp.next_hit_rate!==undefined?hp.next_hit_rate:(nd.recent_freq||0);
+    var freq=nd.recent_freq||0,dp=nd.danger_pct||0;
+    if(ratio<0.7||ratio>1.4)continue;
+    if(heat<7||heat>26)continue;
+    if(freq>3)continue;
+    var dueScore=1-Math.abs(ratio-1.0);
+    candidates.push({n:n,score:dueScore*0.55+heat/26*0.45,ratio:ratio,heat:heat,miss:miss,avgGap:avgGap,dp:dp});
+  }
+  if(!candidates.length)return null;
+  candidates.sort(function(a,b){return b.score-a.score;});
+  var anchor=candidates[0];
+  return{anchor:anchor.n,anchorInfo:anchor,shields:shieldNums,all:[anchor.n].concat(shieldNums)};
+}
+function _computeOneHitSimRec(key,dh,histStart){
+  if(histStart>=dh.length)return null;
+  var poolSize=39;
+  var latestNums=dh[histStart].numbers;
+  var lastSet={},neighborSet={};
+  for(var k=0;k<latestNums.length;k++){
+    lastSet[latestNums[k]]=true;
+    var n=latestNums[k];
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
+  }
+  var histEnd=Math.min(histStart+101,dh.length);
+  var histDraws=[];for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
+  var simNHD={},simHPD={};
+  for(var n=1;n<=poolSize;n++){
+    var miss=0;
+    if(latestNums.indexOf(n)!==-1){miss=0;}
+    else{for(var j=histStart+1;j<dh.length;j++){if(dh[j].numbers.indexOf(n)!==-1)break;miss++;if(miss>50)break;}}
+    var freq=0;for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){if(dh[j].numbers.indexOf(n)!==-1)freq++;}
+    var gaps=[],lastA=-1;
+    for(var j=0;j<histDraws.length;j++){
+      if(histDraws[j].indexOf(n)!==-1){if(lastA!==-1)gaps.push(j-lastA);lastA=j;}
+    }
+    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
+    simNHD[n]={current_miss:miss,recent_freq:freq,avg_gap:avgGap,danger_pct:Math.min(100,Math.round(miss/Math.max(1,avgGap)*100))};
+    var hits50=0,tot50=Math.min(50,histDraws.length);
+    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
+    simHPD[n]={next_hit_rate:tot50?Math.round(hits50/tot50*1000)/10:0};
+  }
+  // Get cold shields (top 4 from existing sim)
+  var coldSim=_computeColdRecSimWithParams(dh,histStart,{maxMiss:20,hotFreqCutoff:4,excludeNeighbor:true});
+  var shieldNums=coldSim?coldSim.slice(0,4).map(function(r){return r.num;}):[];
+  var shieldSet={};shieldNums.forEach(function(n){shieldSet[n]=true;});
+  // Find anchor
+  var cands=[];
+  for(var n=1;n<=poolSize;n++){
+    if(lastSet[n]||neighborSet[n]||shieldSet[n])continue;
+    var nd=simNHD[n],hp=simHPD[n];
+    var ratio=nd.current_miss/Math.max(1,nd.avg_gap);
+    var heat=hp.next_hit_rate;
+    if(ratio<0.7||ratio>1.4)continue;
+    if(heat<7||heat>26)continue;
+    if(nd.recent_freq>3)continue;
+    cands.push({num:n,score:(1-Math.abs(ratio-1))*0.55+heat/26*0.45});
+  }
+  if(!cands.length)return null;
+  cands.sort(function(a,b){return b.score-a.score;});
+  return[{num:cands[0].num,isAnchor:true}].concat(shieldNums.map(function(n){return{num:n};}));
+}
+function runOneHitBacktest(key,periods){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var wins1=0,miss5=0,hits2p=0,total=0;
+  var maxTrials=Math.min(periods,dh.length-2);
+  for(var i=0;i<maxTrials;i++){
+    var simRec=_computeOneHitSimRec(key,dh,i+1);
+    if(!simRec||!simRec.length)continue;
+    total++;
+    var actual=dh[i].numbers,hitCount=0;
+    for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1)hitCount++;}
+    if(hitCount===1)wins1++;
+    else if(hitCount===0)miss5++;
+    else hits2p++;
+  }
+  return{total:total,wins1:wins1,miss5:miss5,hits2p:hits2p};
+}
+function switchOneHitBt(key,periods){
+  var wrap=document.getElementById('pk-one-hit-bt-'+key);
+  if(wrap){
+    wrap.querySelectorAll('.one-hit-bt-tab').forEach(function(t){
+      t.classList.toggle('active',parseInt(t.dataset.p)===periods);
+    });
+  }
+  var el=document.getElementById('pk-one-hit-bt-res-'+key);
+  if(!el)return;
+  var cacheKey=key+'_'+periods;
+  var res=_oneHitBtCache[cacheKey];
+  if(!res){res=runOneHitBacktest(key,periods);if(res)_oneHitBtCache[cacheKey]=res;}
+  if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足</span>';return;}
+  var rate=res.total>0?Math.round(res.wins1/res.total*1000)/10:0;
+  var rateC=rate>=40?'#7e22ce':rate>=30?'#d97706':'#dc2626';
+  el.innerHTML='<div style="font-weight:800;color:'+rateC+'">五選中一勝率 <span style="font-size:.75rem">'+rate+'%</span>'
+    +' <span style="font-size:.56rem;font-weight:400;color:#64748b">（中1顆 '+res.wins1+' 期 / 五不中 '+res.miss5+' 期 / 中2+顆 '+res.hits2p+' 期，共 '+res.total+' 期）</span></div>'
+    +'<div style="font-size:.56rem;color:#475569;margin-top:.07rem">（理論基準：五選中一 ≈ 40.3%，五不中 ≈ 48.3%）</div>';
+}
+function renderOneHitPanel(key){
+  var el=document.getElementById('pk-one-hit-'+key);
+  if(!el)return;
+  var rec=computeOneHitMode(key);
+  if(!rec){el.innerHTML='';return;}
+  function ns(n){return(n<10?'0':'')+n;}
+  var ap=rec.anchorInfo;
+  var anchorBall='<span class="ball-sm '+_clsBall(rec.anchor)+'" style="width:1.75rem;height:1.75rem;font-size:.65rem;box-shadow:0 0 0 3px #7e22ce,0 0 8px #c4b5fd;cursor:default">'+ns(rec.anchor)+'</span>';
+  var shieldBalls=rec.shields.map(function(n){
+    return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.55rem;height:1.55rem;font-size:.58rem;opacity:.75;cursor:default">'+ns(n)+'</span>';
+  }).join('');
+  var activePeriods=parseInt((document.querySelector('#pk-one-hit-bt-'+key+' .one-hit-bt-tab.active')||{}).dataset&&(document.querySelector('#pk-one-hit-bt-'+key+' .one-hit-bt-tab.active')).dataset.p)||30;
+  el.innerHTML='<div class="one-hit-panel">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem">'
+    +'<span style="font-size:.62rem;font-weight:800;color:#6b21a8">🎯 五選中一推薦</span>'
+    +'<button onclick="applyRecToSel(\''+key+'\',['+rec.all.join(',')+'])" '
+    +'style="font-size:.57rem;padding:.1rem .28rem;border:none;border-radius:.25rem;background:#7e22ce;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">帶入選號盤</button>'
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:.35rem;margin-bottom:.15rem;flex-wrap:wrap">'
+    +'<span style="font-size:.56rem;color:#6b21a8;font-weight:700">主力號：</span>'+anchorBall
+    +'<span style="font-size:.56rem;color:#0369a1;font-weight:700;margin-left:.25rem">護盾號：</span>'+shieldBalls
+    +'</div>'
+    +'<div style="font-size:.55rem;color:#6b21a8;line-height:1.55">'
+    +'主力 <strong>'+ns(rec.anchor)+'</strong>：遺漏 '+ap.miss+' 期（均 '+ap.avgGap+' 期，到位率 '+Math.round(ap.ratio*100)+'%）｜熱力 '+Math.round(ap.heat*10)/10+'%｜危 '+ap.dp+'%'
+    +'</div>'
+    +'<div id="pk-one-hit-bt-'+key+'" class="one-hit-bt-tabs" style="margin-top:.22rem">'
+    +'<span style="font-size:.55rem;color:#6b21a8;font-weight:700;margin-right:.08rem">回測：</span>'
+    +'<button class="one-hit-bt-tab active" data-p="30" onclick="switchOneHitBt(\''+key+'\',30)">近30期</button>'
+    +'<button class="one-hit-bt-tab" data-p="50" onclick="switchOneHitBt(\''+key+'\',50)">近50期</button>'
+    +'<button class="one-hit-bt-tab" data-p="100" onclick="switchOneHitBt(\''+key+'\',100)">近100期</button>'
+    +'</div>'
+    +'<div id="pk-one-hit-bt-res-'+key+'"></div>'
+    +'</div>';
+  switchOneHitBt(key,30);
 }
 
 function renderColdFilterPanel(key){
   var el=document.getElementById('pk-cold-rec-'+key);
   if(!el)return;
-  var rec=computeColdFilterRec(key);
-  if(!rec||!rec.length){el.innerHTML='';return;}
+  var rule=_coldFilterRule(key);
+  var rec=computeColdFilterRec(key)||[];
   function ns(n){return(n<10?'0':'')+n;}
-  var balls=rec.map(function(r){
-    return '<span class="ball-sm '+_clsBall(r.num)+'" '
-      +'style="width:1.65rem;height:1.65rem;font-size:.62rem;cursor:default">'+ns(r.num)+'</span>';
-  }).join('');
-  var reasons=rec.map(function(r,i){
-    return '<div style="padding:.1rem 0;border-bottom:1px solid rgba(125,211,252,.35)">'
-      +'<span style="font-weight:800;color:#0369a1">No.'+(i+1)+' </span>'
-      +'<span class="ball-sm '+_clsBall(r.num)+'" style="width:.9rem;height:.9rem;'
-      +'font-size:.42rem;vertical-align:middle">'+ns(r.num)+'</span> '
-      +r.reason+'</div>';
-  }).join('');
+  var balls=rec.length
+    ?rec.map(function(r){
+      return '<span class="ball-sm '+_clsBall(r.num)+'" '
+        +'style="width:1.65rem;height:1.65rem;font-size:.62rem;cursor:default">'+ns(r.num)+'</span>';
+    }).join('')
+    :'<span style="font-size:.62rem;color:#64748b;font-weight:800">目前條件篩不出號碼，請放寬下方條件</span>';
+  var reasons=rec.length
+    ?rec.map(function(r,i){
+      return '<div style="padding:.1rem 0;border-bottom:1px solid rgba(125,211,252,.35)">'
+        +'<span style="font-weight:800;color:#0369a1">No.'+(i+1)+' </span>'
+        +'<span class="ball-sm '+_clsBall(r.num)+'" style="width:.9rem;height:.9rem;'
+        +'font-size:.42rem;vertical-align:middle">'+ns(r.num)+'</span> '
+        +r.reason+'</div>';
+    }).join('')
+    :'<div style="color:#64748b">目前條件沒有產生可帶入的 5 支號碼。</div>';
   var nums=rec.map(function(r){return r.num;});
   var activePeriods=_coldBtPeriod[key]||30;
+  // ── ① 連敗警報（僅用歷史資料，走前模擬）
+  var streak=computeStreakAlert(key);
+  var streakHtml='';
+  if(streak>=3){
+    streakHtml='<div class="streak-alert-box streak-alert-danger">🚨 連敗警報：最近 '+streak+' 期連續命中，目前策略對此彩種失準，建議調整參數或暫停操作</div>';
+  }else if(streak===2){
+    streakHtml='<div class="streak-alert-box streak-alert-warn">⚠️ 注意：最近連續 2 期命中，請留意策略是否需要調整</div>';
+  }
   el.innerHTML='<div class="cold-rec-panel">'
+    +streakHtml
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
-    +'<span style="font-size:.62rem;font-weight:800;color:#0c4a6e">🧊 冷門過濾智能推薦</span>'
-    +'<button onclick="applyRecToSel(\''+key+'\',['+nums.join(',')+'])" '
+    +'<span style="font-size:.62rem;font-weight:800;color:#0c4a6e">🧊 冷門過濾智能推薦｜'+rule.label+'</span>'
+    +(nums.length?'<button onclick="applyRecToSel(\''+key+'\',['+nums.join(',')+'])" '
     +'style="font-size:.57rem;padding:.1rem .3rem;border:none;border-radius:.28rem;'
     +'background:#0369a1;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">'
-    +'一鍵帶入選號盤</button>'
+    +'一鍵帶入選號盤</button>':'<span style="font-size:.57rem;color:#64748b;font-weight:800">無可帶入號碼</span>')
     +'</div>'
+    +'<div style="font-size:.55rem;color:#075985;line-height:1.45;margin:-.02rem 0 .18rem">'
+    +'策略門檻：'+_coldRuleSummary(rule)+'</div>'
     +'<div class="cold-rec-balls">'+balls+'</div>'
+    // ── ② 雙策略共識面板（佔位符，renderConsensusPanel 填入）
+    +'<div id="pk-consensus-'+key+'"></div>'
+    +_coldRuleEditor(key,rule)
     +'<details style="margin-top:.06rem">'
     +'<summary style="font-size:.57rem;color:#0369a1;cursor:pointer;list-style:none;'
     +'font-weight:600;padding:.05rem 0">▶ 查看推理過程</summary>'
@@ -4013,8 +5718,21 @@ function renderColdFilterPanel(key){
     +'</div>'
     +'<div id="pk-cold-bt-result-'+key+'"></div>'
     +'</div>'
+    // ── ③ 自適應參數掃描區塊
+    +'<div class="param-scan-box">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center">'
+    +'<span style="font-size:.57rem;font-weight:800;color:#0c4a6e">⚙️ 自適應參數建議</span>'
+    +'<button onclick="renderAutoParamSuggestion(\''+key+'\')" '
+    +'style="font-size:.55rem;padding:.1rem .26rem;border:none;border-radius:.25rem;background:#0369a1;color:#fff;cursor:pointer;font-weight:700">掃描最優參數</button>'
+    +'</div>'
+    +'<div id="pk-param-scan-'+key+'" style="margin-top:.1rem"></div>'
+    +'</div>'
+    // ── ④ 五選中一推薦面板（佔位符，renderOneHitPanel 填入）
+    +'<div id="pk-one-hit-'+key+'"></div>'
     +'</div>';
   renderColdFilterBacktest(key,activePeriods);
+  renderConsensusPanel(key);
+  renderOneHitPanel(key);
 }
 
 function applyRecToSel(key,nums){
@@ -5579,6 +7297,60 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         response.headers["X-App-Build"] = build_id[:16]
         return response
 
+    @app.route("/api/build", methods=["GET"])
+    def api_build():
+        """部署後快速確認：程式版本與報告 HTML 是否已重建到新版。"""
+        version_value = ""
+        try:
+            version_value = version_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            version_value = ""
+
+        html = ""
+        if output_path.exists():
+            try:
+                html = output_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                html = ""
+
+        source = ""
+        try:
+            source = Path(__file__).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            source = ""
+
+        report_current = False
+        try:
+            report_current = not _report_needs_rebuild()
+        except Exception:
+            report_current = False
+
+        return jsonify({
+            "build": build_id[:16],
+            "report_exists": output_path.exists(),
+            "report_current": report_current,
+            "version": version_value[:16],
+            "source_has_new_cold_rule": (
+                "function _coldFilterRule" in source
+                and "function applyColdRuleSettings" in source
+                and "function resetColdRuleSettings" in source
+                and "function renderMissRankFilterPanel" in source
+                and "function openMissRankCauseModal" in source
+            ),
+            "html_has_new_cold_rule": (
+                "策略門檻" in html
+                and "手動調整篩選條件" in html
+                and "套用條件" in html
+                and "恢復預設" in html
+                and "遺漏排行篩選推薦" in html
+                and "手動調整遺漏排行條件" in html
+                and "openMissRankCauseModal" in html
+            ),
+            "html_has_old_top2_rule": (
+                "冷門前2" in html or "前2代表" in html or "冷門Top2" in html
+            ),
+        })
+
     @app.route("/api/betlog/load", methods=["GET"])
     def api_betlog_load():
         """從 Supabase 載入選號紀錄"""
@@ -5633,7 +7405,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
         try:
             sync_rpt = syncer.sync_all()
             details  = []
-            rebuilt  = False
+            has_new  = False
             for key, info in sync_rpt.items():
                 cfg = LOTTERY_CONFIG[key]
                 ok  = (
@@ -5642,7 +7414,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                     and "來源尚未提供" not in info["message"]
                 )
                 if info["new_count"] > 0:
-                    rebuilt = True
+                    has_new = True
                 sync_meta = ""
                 if info.get("latest_local") or info.get("expected_latest"):
                     sync_meta = f"（目前 {info.get('latest_local', '-')}, 應有 {info.get('expected_latest', '-')}"
@@ -5653,11 +7425,13 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                     "ok":  ok,
                     "msg": f"{cfg['short_name']}：{info['message']}（落後 {info['gap_days']} 天）{sync_meta}",
                 })
-            try:
-                _rebuild_report()
-                rebuilt = True
-            except Exception as e:
-                print(f"[ERROR] analyzer.run after sync: {e}")
+            rebuilt = False
+            if has_new or _report_needs_rebuild():
+                try:
+                    _rebuild_report()
+                    rebuilt = True
+                except Exception as e:
+                    print(f"[ERROR] analyzer.run after sync: {e}")
             return jsonify({"rebuilt": rebuilt, "details": details})
         except Exception as e:
             import traceback
@@ -5710,6 +7484,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
             rhp         = result_data.get("recent_heat_prob", {})
             miss_data   = {str(k): v
                            for k, v in result_data["miss_result"]["current_misses"].items()}
+            miss_rank_data = result_data["miss_result"].get("window_data", {})
             panel_recent_data = result_data["period_result"].get("recent_8", [])
             draw_data   = result_data["period_result"].get("recent_match", panel_recent_data)
             recent_data = draw_data
@@ -5721,6 +7496,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 "success":          True,
                 "panel_inner_html": panel_inner_html,  # replaces #panel-{key} innerHTML
                 "miss_data":        miss_data,
+                "miss_rank_data":   miss_rank_data,
                 "recent_data":      recent_data,
                 "draw_data":        draw_data,
                 "period_data":      period_data,
