@@ -1922,10 +1922,15 @@ tr.stripe td{background:#f8fafc}
 .cold-cause-case{font-size:.58rem;color:#475569;margin-top:.16rem;line-height:1.6}
 .cold-cause-expand{font-size:.6rem;border:none;border-radius:.35rem;background:#0369a1;
   color:#fff;font-weight:800;padding:.16rem .42rem;cursor:pointer;white-space:nowrap}
+.miss-rank-expand{background:#c2410c}
 .cold-modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9998;
   display:flex;align-items:center;justify-content:center;padding:1rem}
 .cold-modal{width:min(860px,96vw);max-height:88vh;overflow:auto;background:#f8fbff;
   border:1px solid #93c5fd;border-radius:.7rem;box-shadow:0 18px 60px rgba(15,23,42,.35)}
+.cold-modal.miss-rank-modal{background:#fffaf3;border-color:#fdba74}
+.cold-modal.miss-rank-modal .cold-modal-head{background:#9a3412}
+.cold-modal.miss-rank-modal .cold-cause-card{border-color:#fdba74}
+.cold-modal.miss-rank-modal .cold-cause-card-title{color:#c2410c}
 .cold-modal-head{position:sticky;top:0;background:#0f3c88;color:#fff;padding:.65rem .85rem;
   display:flex;align-items:center;justify-content:space-between;gap:.8rem;z-index:1}
 .cold-modal-title{font-size:.95rem;font-weight:900}
@@ -4443,11 +4448,68 @@ function renderMissRankBacktest(key,periods){
     +'<span style="color:#c2410c;font-weight:700">中2顆('+res.hits2+'次)</span> | '
     +'<span style="color:#7c3aed;font-weight:700">中3顆+('+res.hits3p+'次)</span></div>'
     +'<details class="cold-cause-box" open><summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
+    +'<div style="display:flex;justify-content:flex-end;margin:-.18rem 0 .18rem">'
+    +'<button class="cold-cause-expand miss-rank-expand" onclick="openMissRankCauseModal(\''+key+'\','+periods+')">放大檢視</button>'
+    +'</div>'
     +'<div style="font-size:.6rem;color:#475569;margin-bottom:.18rem;line-height:1.6">平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。規則：'+_missRankRuleSummary(res.rule)+'</div>'
     +'<div class="cold-cause-grid"><div class="cold-cause-card"><div class="cold-cause-card-title">命中來源</div>'+topCause+'</div>'
     +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1完整條件</div>'+exact1+'</div></div>'
     +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">中2完整路徑</div>'+exact2+'</div>'
     +cases+'</details></div>';
+}
+
+function _missRankCauseModalContent(res){
+  function ns(n){n=parseInt(n);return(n<10?'0':'')+n;}
+  var rate=res.total?Math.round(res.wins/res.total*1000)/10:0;
+  var topCause=_coldTopRows(res.causeAll,Math.max(1,res.hitSum),10);
+  var exact1=_coldTopRows(res.exactHit1,Math.max(1,res.hits1),8);
+  var exact2=_coldTopRows(res.exactHit2,Math.max(1,res.hits2),8);
+  var nums=_coldTopRows(res.numHits,Math.max(1,res.hitSum),10);
+  var cases=(res.cases||[]).length?'<div class="cold-cause-card" style="margin-top:.5rem">'
+    +'<div class="cold-cause-card-title">近期命中案例</div>'
+    +res.cases.slice(0,8).map(function(c){
+      var rows=c.hits.map(function(h){
+        return '<div style="padding:.08rem 0"><strong>'+ns(h.num)+'</strong>：'+h.detail+'</div>';
+      }).join('');
+      return '<div class="cold-cause-case" style="border-top:1px solid rgba(253,186,116,.45);padding-top:.18rem;margin-top:.18rem">'
+        +'<strong>'+c.date+'（中'+c.hitCount+'）</strong>'+rows+'</div>';
+    }).join('')+'</div>':'';
+  return '<div style="font-weight:800;color:#0f172a;margin-bottom:.5rem;line-height:1.75">'
+    +'勝率 '+rate+'%，勝 '+res.wins+' / 敗 '+(res.total-res.wins)+'，共 '+res.total+' 期；'
+    +'平均每期中 '+res.avgHits+' 顆，敗局平均中 '+res.avgLossHits+' 顆。<br>'
+    +'規則：'+_missRankRuleSummary(res.rule)+'</div>'
+    +'<div class="cold-cause-grid">'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">命中來源統計</div>'+topCause+'</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">常命中號碼</div>'+nums+'</div>'
+    +'</div>'
+    +'<div class="cold-cause-card" style="margin-top:.5rem"><div class="cold-cause-card-title">中1完整條件</div>'
+    +'<div style="font-size:.72rem;color:#64748b;margin-bottom:.22rem;line-height:1.65">只中一顆時，這裡列出那一顆的完整來源、視窗、排序條件與熱力危險度。</div>'
+    +exact1+'</div>'
+    +'<div class="cold-cause-card" style="margin-top:.5rem"><div class="cold-cause-card-title">中2完整路徑</div>'
+    +'<div style="font-size:.72rem;color:#64748b;margin-bottom:.22rem;line-height:1.65">中兩顆以上時，這裡列出前兩顆撞到的完整組合，方便你判斷是哪一段條件同時失守。</div>'
+    +exact2+'</div>'
+    +cases;
+}
+
+function openMissRankCauseModal(key,periods){
+  var cacheKey=key+'_'+periods;
+  var res=_missRankBtCache[cacheKey]||runMissRankBacktest(key,periods);
+  if(!res)return;
+  _missRankBtCache[cacheKey]=res;
+  closeMissRankCauseModal();
+  closeColdCauseModal();
+  var html='<div id="miss-rank-cause-modal" class="cold-modal-backdrop" onclick="if(event.target===this)closeMissRankCauseModal()">'
+    +'<div class="cold-modal miss-rank-modal">'
+    +'<div class="cold-modal-head"><div class="cold-modal-title">遺漏排行命中原因放大檢視｜近'+periods+'期</div>'
+    +'<button class="cold-modal-close" onclick="closeMissRankCauseModal()">關閉</button></div>'
+    +'<div class="cold-modal-body">'+_missRankCauseModalContent(res)+'</div>'
+    +'</div></div>';
+  document.body.insertAdjacentHTML('beforeend',html);
+}
+
+function closeMissRankCauseModal(){
+  var el=document.getElementById('miss-rank-cause-modal');
+  if(el)el.remove();
 }
 
 function renderMissRankFilterPanel(key){
@@ -6868,6 +6930,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 and "function applyColdRuleSettings" in source
                 and "function resetColdRuleSettings" in source
                 and "function renderMissRankFilterPanel" in source
+                and "function openMissRankCauseModal" in source
             ),
             "html_has_new_cold_rule": (
                 "策略門檻" in html
@@ -6876,6 +6939,7 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
                 and "恢復預設" in html
                 and "遺漏排行篩選推薦" in html
                 and "手動調整遺漏排行條件" in html
+                and "openMissRankCauseModal" in html
             ),
             "html_has_old_top2_rule": (
                 "冷門前2" in html or "前2代表" in html or "冷門Top2" in html
