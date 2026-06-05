@@ -1951,10 +1951,18 @@ tr.stripe td{background:#f8fafc}
 .trap-row{display:flex;align-items:center;gap:.28rem;padding:.06rem 0;border-bottom:1px solid #f0f9ff;font-size:.56rem}
 .param-scan-box{border-top:1px solid #bae6fd;margin-top:.26rem;padding-top:.2rem}
 .param-scan-result{background:#f0fdf4;border:1.5px solid #86efac;border-radius:.38rem;padding:.2rem .36rem;font-size:.57rem;margin-top:.1rem;line-height:1.55}
-.one-hit-panel{background:linear-gradient(135deg,#fdf4ff,#fae8ff);border:1.5px solid #d8b4fe;border-radius:.6rem;padding:.38rem .48rem;margin-top:.28rem}
-.one-hit-bt-tabs{display:flex;gap:.16rem;margin-bottom:.18rem;align-items:center}
-.one-hit-bt-tab{font-size:.55rem;padding:.1rem .26rem;border:1px solid #d8b4fe;border-radius:.28rem;background:#fff;color:#7e22ce;cursor:pointer;font-weight:600;line-height:1.5;transition:background .1s,color .1s}
-.one-hit-bt-tab.active{background:#7e22ce;color:#fff;border-color:#7e22ce}
+/* consensus standalone panel (v13.1) */
+.consensus-bt-panel{background:linear-gradient(135deg,#f0fdf4,#dcfce7);border:1.5px solid #86efac;border-radius:.65rem;padding:.45rem .55rem;margin-bottom:.38rem}
+.consensus-bt-tabs{display:flex;gap:.18rem;margin-bottom:.2rem;align-items:center}
+.consensus-bt-tab{font-size:.55rem;padding:.1rem .28rem;border:1px solid #86efac;border-radius:.28rem;background:#fff;color:#15803d;cursor:pointer;font-weight:600;line-height:1.5;transition:background .1s,color .1s}
+.consensus-bt-tab.active{background:#15803d;color:#fff;border-color:#15803d}
+.consensus-cause-grid{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;margin-top:.22rem}
+.consensus-cause-card{background:rgba(255,255,255,.7);border:1px solid #bbf7d0;border-radius:.4rem;padding:.24rem .3rem}
+.consensus-cause-card-title{font-size:.6rem;font-weight:900;color:#15803d;margin-bottom:.12rem}
+.consensus-cause-row{display:flex;justify-content:space-between;font-size:.57rem;color:#334155;border-bottom:1px solid rgba(134,239,172,.35);padding:.06rem 0;line-height:1.45}
+.consensus-cause-row:last-child{border-bottom:none}
+.consensus-case-line{font-size:.56rem;color:#475569;line-height:1.55;padding:.04rem 0;border-bottom:1px solid #f0fdf4}
+.consensus-sug{margin-top:.2rem;font-size:.58rem;color:#14532d;background:#f0fdf4;border:1px solid #86efac;border-radius:.35rem;padding:.2rem .28rem;line-height:1.65}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -2890,6 +2898,8 @@ footer{text-align:center;font-size:.68rem;color:#94a3b8;padding:1.1rem .5rem}
             '<div id="pk-cold-rec-' + key + '"></div>'
             # ── Miss-rank recommendation panel
             '<div id="pk-miss-rank-rec-' + key + '"></div>'
+            # ── Dual-strategy consensus standalone panel (v13.1)
+            '<div id="pk-consensus-rec-' + key + '"></div>'
             # ── Miss distribution histogram (collapsible)
             '<details style="margin-bottom:.4rem">'
             '<summary style="color:#6366f1;font-size:.68rem;font-weight:600;cursor:pointer;list-style:none;display:flex;align-items:center;gap:.22rem;padding:.22rem .3rem;border-radius:.3rem;transition:background .12s" onmouseover="this.style.background=\'#eff6ff\'" onmouseout="this.style.background=\'\'">'
@@ -3397,6 +3407,7 @@ function switchTab(key){
   _restoreLock(key);
   renderColdFilterPanel(key);
   renderMissRankFilterPanel(key);
+  renderConsensusBtPanel(key);
 }
 function setMissWin(key,win){
   var col=document.getElementById('miss-col-'+key);
@@ -3544,7 +3555,7 @@ function _btStore(key,d){
   if(d.rev_oe_data){      window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
   if(d.draw_history_data){window._DRAW_HISTORY=window._DRAW_HISTORY||{};    window._DRAW_HISTORY[key]=d.draw_history_data;
     // Invalidate backtest cache for this key when draw history changes
-    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _oneHitBtCache[key+'_'+p];});
+    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _consBtCache[key+'_'+p];});
     delete _autoParamCache[key+'_50'];
     _missRankClearBtCache(key);
   }
@@ -3571,6 +3582,7 @@ function updateSelectionBoard(key){
   renderOEColorGuide(key);       // 今日配比推薦（v10.2）
   renderColdFilterPanel(key);    // 冷門過濾智能推薦（v11）
   renderMissRankFilterPanel(key); // 遺漏排行篩選推薦
+  renderConsensusBtPanel(key);   // 雙策略共識獨立面板（v13.1）
 }
 
 /* ── updateTailOmissions: （panel_inner_html 已包含，此為獨立觸發入口）── */
@@ -3825,6 +3837,7 @@ var _coldBtCache={};
 var _coldBtPeriod={};
 var _missRankBtCache={};
 var _missRankBtPeriod={};
+var _consBtPeriod={};
 
 function _coldFilterRule(key){
   var base={
@@ -5496,163 +5509,234 @@ function renderAutoParamSuggestion(key){
 }
 
 /* ④ 五選中一推薦模式：主力號（準到期）+ 護盾號（超冷）*/
-var _oneHitBtCache={};
-function computeOneHitMode(key){
-  var nhd=(window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{};
-  var hpd=(window._HEAT_PROB_DATA&&window._HEAT_PROB_DATA[key])||{};
-  var rd=(window._RECENT_DATA&&window._RECENT_DATA[key])||[];
-  if(!rd.length)return null;
-  var latest=rd[0];
-  if(!latest||!latest.numbers||!latest.numbers.length)return null;
-  var latestNums=latest.numbers;
-  var lastSet={},neighborSet={};
-  latestNums.forEach(function(n){lastSet[n]=true;});
-  latestNums.forEach(function(n){
-    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
-    if(n<39&&!lastSet[n+1])neighborSet[n+1]=true;
-  });
-  var coldRec=computeColdFilterRec(key)||[];
-  var shieldNums=coldRec.slice(0,4).map(function(r){return r.num;});
-  var shieldSet={};shieldNums.forEach(function(n){shieldSet[n]=true;});
-  var candidates=[];
-  for(var n=1;n<=39;n++){
-    if(lastSet[n]||neighborSet[n]||shieldSet[n])continue;
-    var nd=nhd[String(n)]||nhd[n]||{};
-    var hp=hpd[String(n)]||{};
-    var miss=nd.current_miss||0,avgGap=nd.avg_gap||8;
-    var ratio=miss/Math.max(1,avgGap);
-    var heat=hp.next_hit_rate!==undefined?hp.next_hit_rate:(nd.recent_freq||0);
-    var freq=nd.recent_freq||0,dp=nd.danger_pct||0;
-    if(ratio<0.7||ratio>1.4)continue;
-    if(heat<7||heat>26)continue;
-    if(freq>3)continue;
-    var dueScore=1-Math.abs(ratio-1.0);
-    candidates.push({n:n,score:dueScore*0.55+heat/26*0.45,ratio:ratio,heat:heat,miss:miss,avgGap:avgGap,dp:dp});
-  }
-  if(!candidates.length)return null;
-  candidates.sort(function(a,b){return b.score-a.score;});
-  var anchor=candidates[0];
-  return{anchor:anchor.n,anchorInfo:anchor,shields:shieldNums,all:[anchor.n].concat(shieldNums)};
-}
-function _computeOneHitSimRec(key,dh,histStart){
-  if(histStart>=dh.length)return null;
-  var poolSize=39;
-  var latestNums=dh[histStart].numbers;
-  var lastSet={},neighborSet={};
-  for(var k=0;k<latestNums.length;k++){
-    lastSet[latestNums[k]]=true;
-    var n=latestNums[k];
-    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
-    if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
-  }
-  var histEnd=Math.min(histStart+101,dh.length);
-  var histDraws=[];for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
-  var simNHD={},simHPD={};
-  for(var n=1;n<=poolSize;n++){
-    var miss=0;
-    if(latestNums.indexOf(n)!==-1){miss=0;}
-    else{for(var j=histStart+1;j<dh.length;j++){if(dh[j].numbers.indexOf(n)!==-1)break;miss++;if(miss>50)break;}}
-    var freq=0;for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){if(dh[j].numbers.indexOf(n)!==-1)freq++;}
-    var gaps=[],lastA=-1;
-    for(var j=0;j<histDraws.length;j++){
-      if(histDraws[j].indexOf(n)!==-1){if(lastA!==-1)gaps.push(j-lastA);lastA=j;}
-    }
-    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
-    simNHD[n]={current_miss:miss,recent_freq:freq,avg_gap:avgGap,danger_pct:Math.min(100,Math.round(miss/Math.max(1,avgGap)*100))};
-    var hits50=0,tot50=Math.min(50,histDraws.length);
-    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
-    simHPD[n]={next_hit_rate:tot50?Math.round(hits50/tot50*1000)/10:0};
-  }
-  // Get cold shields (top 4 from existing sim)
-  var coldSim=_computeColdRecSimWithParams(dh,histStart,{maxMiss:20,hotFreqCutoff:4,excludeNeighbor:true});
-  var shieldNums=coldSim?coldSim.slice(0,4).map(function(r){return r.num;}):[];
-  var shieldSet={};shieldNums.forEach(function(n){shieldSet[n]=true;});
-  // Find anchor
-  var cands=[];
-  for(var n=1;n<=poolSize;n++){
-    if(lastSet[n]||neighborSet[n]||shieldSet[n])continue;
-    var nd=simNHD[n],hp=simHPD[n];
-    var ratio=nd.current_miss/Math.max(1,nd.avg_gap);
-    var heat=hp.next_hit_rate;
-    if(ratio<0.7||ratio>1.4)continue;
-    if(heat<7||heat>26)continue;
-    if(nd.recent_freq>3)continue;
-    cands.push({num:n,score:(1-Math.abs(ratio-1))*0.55+heat/26*0.45});
-  }
-  if(!cands.length)return null;
-  cands.sort(function(a,b){return b.score-a.score;});
-  return[{num:cands[0].num,isAnchor:true}].concat(shieldNums.map(function(n){return{num:n};}));
-}
-function runOneHitBacktest(key,periods){
+/* ══ 雙策略共識面板獨立回測引擎（v13.1）══
+   走前驗證：每期預測只用 histStart 之後（即更老）的歷史資料，
+   絕不讀取 dh[i]（待預測期）之前的 dh[i-1]...dh[0]。
+   ══════════════════════════════════════════════════════════════ */
+var _consBtCache={};
+function runConsensusBacktest(key,periods){
   var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
   if(dh.length<periods+5)return null;
-  var wins1=0,miss5=0,hits2p=0,total=0;
+  var wins=0,losses=0,total=0;
+  /* 號碼層級統計 */
+  var numHits={},numRec={};
+  /* 來源層級統計：coldOnly/missOnly/both 各推薦了多少次被命中 */
+  var srcHits={cold:0,miss:0};
+  /* 失敗時號碼當時的狀態統計（miss/heat/danger 分段） */
+  var statBuckets={miss:{},heat:{},danger:{}};
+  /* 失敗期的開獎分佈統計 */
+  var drawPatterns={odd:{},color:{},consec:{Y:0,N:0}};
+  /* 最近失敗案例（最多8筆） */
+  var failCases=[];
+  var mrRule=_missRankRule(key);
   var maxTrials=Math.min(periods,dh.length-2);
+  function bucket3(v,thresholds,labels){
+    for(var bi=0;bi<thresholds.length;bi++){if(v<thresholds[bi])return labels[bi];}
+    return labels[labels.length-1];
+  }
   for(var i=0;i<maxTrials;i++){
-    var simRec=_computeOneHitSimRec(key,dh,i+1);
-    if(!simRec||!simRec.length)continue;
+    var histStart=i+1;
+    /* 走前模擬：兩套算法都只看 histStart 及更早的資料 */
+    var coldSim=_computeColdRecSim(key,dh,histStart);
+    var missSim=_computeMissRankRecSim(key,dh,histStart);
+    if(!coldSim||!coldSim.length||!missSim||!missSim.length)continue;
+    var coldSet={},missSet={};
+    for(var ri=0;ri<coldSim.length;ri++)coldSet[coldSim[ri].num]=ri+1;
+    for(var ri=0;ri<missSim.length;ri++)missSet[missSim[ri].num]=ri+1;
+    /* 取交集 = 共識號 */
+    var consNums=[];
+    for(var ri=0;ri<coldSim.length;ri++){if(missSet[coldSim[ri].num])consNums.push(coldSim[ri].num);}
+    if(!consNums.length)continue;
     total++;
-    var actual=dh[i].numbers,hitCount=0;
-    for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1)hitCount++;}
-    if(hitCount===1)wins1++;
-    else if(hitCount===0)miss5++;
-    else hits2p++;
-  }
-  return{total:total,wins1:wins1,miss5:miss5,hits2p:hits2p};
-}
-function switchOneHitBt(key,periods){
-  var wrap=document.getElementById('pk-one-hit-bt-'+key);
-  if(wrap){
-    wrap.querySelectorAll('.one-hit-bt-tab').forEach(function(t){
-      t.classList.toggle('active',parseInt(t.dataset.p)===periods);
+    consNums.forEach(function(n){numRec[n]=(numRec[n]||0)+1;});
+    /* 對比 dh[i]（預測後的實際開獎，嚴格在 histStart 之後） */
+    var actual=dh[i].numbers;
+    var hitNums=consNums.filter(function(n){return actual.indexOf(n)!==-1;});
+    if(!hitNums.length){wins++;continue;}
+    losses++;
+    /* ── 失敗原因分析 ── */
+    var simData=_missRankBuildSimData(dh,histStart,mrRule);
+    hitNums.forEach(function(n){
+      numHits[n]=(numHits[n]||0)+1;
+      /* 哪套策略帶進來 */
+      var cr=coldSet[n]||99,mr=missSet[n]||99;
+      if(cr<mr)srcHits.cold++;else srcHits.miss++;
+      /* 當時狀態 */
+      var nd=simData.nhd[n]||{},hp=simData.hpd[n]||{};
+      var miss=nd.current_miss||0;
+      var heat=hp.next_hit_rate||0;
+      var dp=nd.danger_pct||0;
+      var mb=bucket3(miss,[5,10,20],['遺漏0~4','遺漏5~9','遺漏10~19','遺漏20+']);
+      var hb=bucket3(heat,[8,15,22],['熱力<8%','熱力8~14%','熱力15~21%','熱力22%+']);
+      var db=bucket3(dp,[40,70],['危<40%','危40~69%','危70%+']);
+      statBuckets.miss[mb]=(statBuckets.miss[mb]||0)+1;
+      statBuckets.heat[hb]=(statBuckets.heat[hb]||0)+1;
+      statBuckets.danger[db]=(statBuckets.danger[db]||0)+1;
     });
+    /* 開獎分佈特徵 */
+    var sorted=actual.slice().sort(function(a,b){return a-b;});
+    var oddC=sorted.filter(function(n){return n%2===1;}).length;
+    var redC=sorted.filter(function(n){return n%3===1;}).length;
+    var blueC=sorted.filter(function(n){return n%3===2;}).length;
+    var hasC=false;for(var j=0;j<sorted.length-1;j++){if(sorted[j+1]-sorted[j]===1){hasC=true;break;}}
+    var ok=oddC+'單'+(5-oddC)+'雙';
+    var ck=redC+'紅'+blueC+'藍'+(5-redC-blueC)+'綠';
+    drawPatterns.odd[ok]=(drawPatterns.odd[ok]||0)+1;
+    drawPatterns.color[ck]=(drawPatterns.color[ck]||0)+1;
+    drawPatterns.consec[hasC?'Y':'N']++;
+    if(failCases.length<8){
+      failCases.push({
+        date:dh[i].date||'',
+        hitNums:hitNums,
+        actual:sorted,
+        odd:oddC,consec:hasC,
+        hitInfo:hitNums.map(function(n){
+          var nd=simData.nhd[n]||{},hp=simData.hpd[n]||{};
+          var cr=coldSet[n],mr=missSet[n];
+          return{num:n,
+            src:cr&&mr?'共識':(cr?'冷門第'+cr+'位':'遺漏第'+mr+'位'),
+            miss:nd.current_miss||0,heat:hp.next_hit_rate||0,dp:nd.danger_pct||0};
+        })
+      });
+    }
   }
-  var el=document.getElementById('pk-one-hit-bt-res-'+key);
+  return{total:total,wins:wins,losses:losses,numHits:numHits,numRec:numRec,
+    srcHits:srcHits,statBuckets:statBuckets,drawPatterns:drawPatterns,failCases:failCases};
+}
+function switchConsBt(key,periods){
+  _consBtPeriod[key]=periods;
+  var wrap=document.getElementById('pk-cons-bt-'+key);
+  if(wrap)wrap.querySelectorAll('.consensus-bt-tab').forEach(function(t){
+    t.classList.toggle('active',parseInt(t.dataset.p)===periods);
+  });
+  renderConsensusBacktest(key,periods);
+}
+function renderConsensusBacktest(key,periods){
+  var el=document.getElementById('pk-cons-bt-res-'+key);
   if(!el)return;
   var cacheKey=key+'_'+periods;
-  var res=_oneHitBtCache[cacheKey];
-  if(!res){res=runOneHitBacktest(key,periods);if(res)_oneHitBtCache[cacheKey]=res;}
-  if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足</span>';return;}
-  var rate=res.total>0?Math.round(res.wins1/res.total*1000)/10:0;
-  var rateC=rate>=40?'#7e22ce':rate>=30?'#d97706':'#dc2626';
-  el.innerHTML='<div style="font-weight:800;color:'+rateC+'">五選中一勝率 <span style="font-size:.75rem">'+rate+'%</span>'
-    +' <span style="font-size:.56rem;font-weight:400;color:#64748b">（中1顆 '+res.wins1+' 期 / 五不中 '+res.miss5+' 期 / 中2+顆 '+res.hits2p+' 期，共 '+res.total+' 期）</span></div>'
-    +'<div style="font-size:.56rem;color:#475569;margin-top:.07rem">（理論基準：五選中一 ≈ 40.3%，五不中 ≈ 48.3%）</div>';
-}
-function renderOneHitPanel(key){
-  var el=document.getElementById('pk-one-hit-'+key);
-  if(!el)return;
-  var rec=computeOneHitMode(key);
-  if(!rec){el.innerHTML='';return;}
+  var res=_consBtCache[cacheKey];
+  if(!res){res=runConsensusBacktest(key,periods);if(res)_consBtCache[cacheKey]=res;}
+  if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法回測</span>';return;}
+  if(!res.total){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">該期數內兩套策略從未產生共識號</span>';return;}
   function ns(n){return(n<10?'0':'')+n;}
-  var ap=rec.anchorInfo;
-  var anchorBall='<span class="ball-sm '+_clsBall(rec.anchor)+'" style="width:1.75rem;height:1.75rem;font-size:.65rem;box-shadow:0 0 0 3px #7e22ce,0 0 8px #c4b5fd;cursor:default">'+ns(rec.anchor)+'</span>';
-  var shieldBalls=rec.shields.map(function(n){
-    return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.55rem;height:1.55rem;font-size:.58rem;opacity:.75;cursor:default">'+ns(n)+'</span>';
+  var rate=Math.round(res.wins/res.total*1000)/10;
+  var rateC=rate>=60?'#16a34a':rate>=48?'#d97706':'#dc2626';
+  /* ── 陷阱號 ── */
+  var trapList=Object.keys(res.numRec).map(function(n){
+    var rec=res.numRec[n],hit=res.numHits[n]||0;
+    return{num:parseInt(n),rec:rec,hit:hit,rate:rec>=3?Math.round(hit/rec*100):null};
+  }).filter(function(x){return x.rate!==null&&x.rate>=30;})
+    .sort(function(a,b){return b.rate-a.rate;}).slice(0,4);
+  var trapHtml=trapList.length
+    ?'<div style="margin-top:.16rem;font-size:.57rem"><span style="font-weight:800;color:#7c2d12">陷阱號：</span>'
+      +trapList.map(function(x){
+        var col=x.rate>=60?'#dc2626':x.rate>=40?'#c2410c':'#d97706';
+        return '<span style="color:'+col+';font-weight:700">'+ns(x.num)+'('+x.rate+'%)</span>';
+      }).join(' ')+'</div>'
+    :'';
+  /* ── 來源分析 ── */
+  var totalSrcHits=(res.srcHits.cold||0)+(res.srcHits.miss||0);
+  var srcHtml='';
+  if(totalSrcHits>0){
+    var cp=Math.round(res.srcHits.cold/totalSrcHits*100);
+    var mp=100-cp;
+    srcHtml='<div class="consensus-cause-row"><span>失敗來源</span><span><strong>冷門優先 '+cp+'%</strong> vs 遺漏優先 '+mp+'%</span></div>';
+  }
+  /* ── 狀態分析 ── */
+  function topBucket(obj){
+    var top='',cnt=0;
+    Object.keys(obj).forEach(function(k){if((obj[k]||0)>cnt){cnt=obj[k];top=k;}});
+    return top?(top+'('+cnt+'次)'):'—';
+  }
+  /* ── 開獎特徵 ── */
+  var topOdd=topBucket(res.drawPatterns.odd);
+  var topColor=topBucket(res.drawPatterns.color);
+  var consecPct=res.drawPatterns.consec.Y+res.drawPatterns.consec.N>0
+    ?Math.round(res.drawPatterns.consec.Y/(res.drawPatterns.consec.Y+res.drawPatterns.consec.N)*100):0;
+  /* ── 失敗案例 ── */
+  var casesHtml=res.failCases.slice(0,4).map(function(c){
+    var hitBalls=c.hitNums.map(function(n){
+      return'<span class="ball-sm '+_clsBall(n)+'" style="width:.95rem;height:.95rem;font-size:.42rem">'+ns(n)+'</span>';
+    }).join('');
+    var info=c.hitInfo.map(function(h){
+      return ns(h.num)+'（'+h.src+'·遺漏'+h.miss+'·熱'+Math.round(h.heat*10)/10+'%·危'+h.dp+'%）';
+    }).join('、');
+    return'<div class="consensus-case-line">'+c.date+' 共識命中：'+hitBalls+' '+info+'</div>';
   }).join('');
-  var activePeriods=parseInt((document.querySelector('#pk-one-hit-bt-'+key+' .one-hit-bt-tab.active')||{}).dataset&&(document.querySelector('#pk-one-hit-bt-'+key+' .one-hit-bt-tab.active')).dataset.p)||30;
-  el.innerHTML='<div class="one-hit-panel">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem">'
-    +'<span style="font-size:.62rem;font-weight:800;color:#6b21a8">🎯 五選中一推薦</span>'
-    +'<button onclick="applyRecToSel(\''+key+'\',['+rec.all.join(',')+'])" '
-    +'style="font-size:.57rem;padding:.1rem .28rem;border:none;border-radius:.25rem;background:#7e22ce;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">帶入選號盤</button>'
+  el.innerHTML='<div>'
+    +'<div style="font-weight:800;font-size:.65rem;color:'+rateC+'">'
+    +'共識五不中率 <span style="font-size:.8rem">'+rate+'%</span>'
+    +'<span style="font-size:.56rem;font-weight:400;color:#64748b"> （勝'+res.wins+' / 敗'+res.losses+' / 有共識共'+res.total+'期）</span></div>'
+    +trapHtml
+    +'<div class="consensus-cause-grid">'
+    +'<div class="consensus-cause-card"><div class="consensus-cause-card-title">失敗號碼與來源</div>'
+    +srcHtml
+    +'<div class="consensus-cause-row"><span>遺漏狀態最多</span><span><strong>'+topBucket(res.statBuckets.miss)+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>熱力狀態最多</span><span><strong>'+topBucket(res.statBuckets.heat)+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>危險度最多</span><span><strong>'+topBucket(res.statBuckets.danger)+'</strong></span></div>'
     +'</div>'
-    +'<div style="display:flex;align-items:center;gap:.35rem;margin-bottom:.15rem;flex-wrap:wrap">'
-    +'<span style="font-size:.56rem;color:#6b21a8;font-weight:700">主力號：</span>'+anchorBall
-    +'<span style="font-size:.56rem;color:#0369a1;font-weight:700;margin-left:.25rem">護盾號：</span>'+shieldBalls
-    +'</div>'
-    +'<div style="font-size:.55rem;color:#6b21a8;line-height:1.55">'
-    +'主力 <strong>'+ns(rec.anchor)+'</strong>：遺漏 '+ap.miss+' 期（均 '+ap.avgGap+' 期，到位率 '+Math.round(ap.ratio*100)+'%）｜熱力 '+Math.round(ap.heat*10)/10+'%｜危 '+ap.dp+'%'
-    +'</div>'
-    +'<div id="pk-one-hit-bt-'+key+'" class="one-hit-bt-tabs" style="margin-top:.22rem">'
-    +'<span style="font-size:.55rem;color:#6b21a8;font-weight:700;margin-right:.08rem">回測：</span>'
-    +'<button class="one-hit-bt-tab active" data-p="30" onclick="switchOneHitBt(\''+key+'\',30)">近30期</button>'
-    +'<button class="one-hit-bt-tab" data-p="50" onclick="switchOneHitBt(\''+key+'\',50)">近50期</button>'
-    +'<button class="one-hit-bt-tab" data-p="100" onclick="switchOneHitBt(\''+key+'\',100)">近100期</button>'
-    +'</div>'
-    +'<div id="pk-one-hit-bt-res-'+key+'"></div>'
+    +'<div class="consensus-cause-card"><div class="consensus-cause-card-title">失敗開獎分佈特徵</div>'
+    +'<div class="consensus-cause-row"><span>最常見單雙</span><span><strong>'+topOdd+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>最常見色球</span><span><strong>'+topColor+'</strong></span></div>'
+    +'<div class="consensus-cause-row"><span>含連號比例</span><span><strong>'+consecPct+'%</strong></span></div>'
+    +'</div></div>'
+    +(casesHtml?'<details style="margin-top:.14rem"><summary style="font-size:.57rem;color:#15803d;cursor:pointer;font-weight:700;list-style:none">▶ 查看最近失敗案例</summary>'
+      +'<div style="margin-top:.1rem">'+casesHtml+'</div></details>':'')
     +'</div>';
-  switchOneHitBt(key,30);
+}
+
+/* ── 雙策略共識獨立面板（v13.1） ── */
+function renderConsensusBtPanel(key){
+  var el=document.getElementById('pk-consensus-rec-'+key);
+  if(!el)return;
+  /* 計算目前共識號 */
+  var coldRec=computeColdFilterRec(key)||[];
+  var missRec=computeMissRankFilterRec(key)||[];
+  function ns(n){return(n<10?'0':'')+n;}
+  var coldSet={},missSet={};
+  coldRec.forEach(function(r){coldSet[r.num]=true;});
+  missRec.forEach(function(r){missSet[r.num]=true;});
+  var both=[],coldOnly=[],missOnly=[];
+  Object.keys(coldSet).forEach(function(n){n=parseInt(n);(missSet[n]?both:coldOnly).push(n);});
+  Object.keys(missSet).forEach(function(n){n=parseInt(n);if(!coldSet[n])missOnly.push(n);});
+  function ball(n,label,sz){
+    sz=sz||'1.3rem';
+    return '<span title="'+label+'" class="ball-sm '+_clsBall(n)+'" style="width:'+sz+';height:'+sz+';font-size:.52rem;cursor:default">'+ns(n)+'</span>';
+  }
+  var ballsHtml='';
+  if(both.length){
+    ballsHtml+='<div style="margin-bottom:.12rem"><span style="font-weight:800;color:#15803d;font-size:.58rem">共識安全號：</span>'
+      +both.map(function(n){return ball(n,'共識','1.55rem');}).join(' ')+'</div>';
+  }
+  if(coldOnly.length||missOnly.length){
+    ballsHtml+='<div style="font-size:.56rem">';
+    if(coldOnly.length)ballsHtml+='<span style="font-weight:700;color:#0369a1">冷門獨推：</span>'+coldOnly.map(function(n){return ball(n,'冷門獨推');}).join(' ')+'　';
+    if(missOnly.length)ballsHtml+='<span style="font-weight:700;color:#c2410c">遺漏獨推：</span>'+missOnly.map(function(n){return ball(n,'遺漏獨推');}).join(' ');
+    ballsHtml+='</div>';
+  }
+  if(!both.length&&!coldOnly.length&&!missOnly.length){
+    ballsHtml='<span style="font-size:.57rem;color:#64748b">兩套策略尚未產生推薦號碼</span>';
+  }
+  /* 回測標籤 */
+  var activePeriods=_consBtPeriod[key]||30;
+  var tabsHtml='<div class="consensus-bt-tabs" id="pk-cons-bt-'+key+'">'
+    +'<span style="font-size:.55rem;color:#15803d;font-weight:700;margin-right:.1rem">📊 共識回測：</span>'
+    +'<button class="consensus-bt-tab'+(activePeriods===30?' active':'')+'" data-p="30" onclick="switchConsBt(\''+key+'\',30)">近30期</button>'
+    +'<button class="consensus-bt-tab'+(activePeriods===50?' active':'')+'" data-p="50" onclick="switchConsBt(\''+key+'\',50)">近50期</button>'
+    +'<button class="consensus-bt-tab'+(activePeriods===100?' active':'')+'" data-p="100" onclick="switchConsBt(\''+key+'\',100)">近100期</button>'
+    +'</div>'
+    +'<div id="pk-cons-bt-res-'+key+'"></div>';
+  el.innerHTML='<div class="consensus-bt-panel">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
+    +'<span style="font-size:.62rem;font-weight:800;color:#14532d">🤝 雙策略共識推薦</span>'
+    +'<span style="font-size:.52rem;color:#475569">冷門過濾 ∩ 遺漏排行</span>'
+    +'</div>'
+    +ballsHtml
+    +'<div style="margin-top:.08rem;font-size:.53rem;color:#475569">共識號 = 優先五不中；分歧號 = 可考慮作五選中一主力號</div>'
+    +'<div style="margin-top:.14rem">'+tabsHtml+'</div>'
+    +'</div>';
+  renderConsensusBacktest(key,activePeriods);
 }
 
 function renderColdFilterPanel(key){
@@ -5698,8 +5782,6 @@ function renderColdFilterPanel(key){
     +'<div style="font-size:.55rem;color:#075985;line-height:1.45;margin:-.02rem 0 .18rem">'
     +'策略門檻：'+_coldRuleSummary(rule)+'</div>'
     +'<div class="cold-rec-balls">'+balls+'</div>'
-    // ── ② 雙策略共識面板（佔位符，renderConsensusPanel 填入）
-    +'<div id="pk-consensus-'+key+'"></div>'
     +_coldRuleEditor(key,rule)
     +'<details style="margin-top:.06rem">'
     +'<summary style="font-size:.57rem;color:#0369a1;cursor:pointer;list-style:none;'
@@ -5727,12 +5809,8 @@ function renderColdFilterPanel(key){
     +'</div>'
     +'<div id="pk-param-scan-'+key+'" style="margin-top:.1rem"></div>'
     +'</div>'
-    // ── ④ 五選中一推薦面板（佔位符，renderOneHitPanel 填入）
-    +'<div id="pk-one-hit-'+key+'"></div>'
     +'</div>';
   renderColdFilterBacktest(key,activePeriods);
-  renderConsensusPanel(key);
-  renderOneHitPanel(key);
 }
 
 function applyRecToSel(key,nums){
