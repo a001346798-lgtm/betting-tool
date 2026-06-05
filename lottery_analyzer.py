@@ -1885,6 +1885,8 @@ tr.stripe td{background:#f8fafc}
 .cold-cause-card-title{font-size:.62rem;font-weight:900;color:#0369a1;margin-bottom:.14rem}
 .cold-cause-row{display:flex;justify-content:space-between;gap:.3rem;font-size:.6rem;
   color:#334155;border-bottom:1px solid rgba(186,230,253,.45);padding:.08rem 0;line-height:1.45}
+.cold-cause-row span{flex:1;min-width:0;overflow-wrap:anywhere}
+.cold-cause-row strong{white-space:nowrap}
 .cold-cause-row:last-child{border-bottom:none}
 .cold-cause-sug{margin-top:.22rem;font-size:.6rem;color:#7c2d12;background:#fff7ed;
   border:1px solid #fed7aa;border-radius:.38rem;padding:.22rem .3rem;line-height:1.65}
@@ -3788,6 +3790,7 @@ function runColdFilterBacktest(key,periods){
   if(dh.length<periods+5)return null;
   var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
   var causeAll={},causeHit1={},causeHit2={},causeHit3p={},pairHit2={},numHits={},cases=[];
+  var exactHit1={},exactHit2First={},exactHit2Second={},exactPair2={};
   var maxTrials=Math.min(periods,dh.length-2);
   function addCause(bucket,label){bucket[label]=(bucket[label]||0)+1;}
   for(var i=0;i<maxTrials;i++){
@@ -3817,14 +3820,20 @@ function runColdFilterBacktest(key,periods){
           addCause(bucket,label);
         });
       });
+      if(hitCount===1){
+        addCause(exactHit1,_coldExactLabel(hitRecs[0]));
+      }
       if(hitCount===2){
         addCause(pairHit2,_coldPairLabel(hitRecs[0],hitRecs[1]));
+        addCause(exactHit2First,_coldExactLabel(hitRecs[0]));
+        addCause(exactHit2Second,_coldExactLabel(hitRecs[1]));
+        addCause(exactPair2,_coldExactLabel(hitRecs[0])+' → '+_coldExactLabel(hitRecs[1]));
       }
       if(cases.length<3){
         cases.push({
           date:dh[i].date||'',
           hits:hitRecs.map(function(r){
-            return{num:r.num,labels:_coldCauseLabels(r).slice(0,2)};
+            return{num:r.num,labels:_coldCauseLabels(r).slice(0,2),exact:_coldExactLabel(r)};
           })
         });
       }
@@ -3841,9 +3850,36 @@ function runColdFilterBacktest(key,periods){
     causeHit2:causeHit2,
     causeHit3p:causeHit3p,
     pairHit2:pairHit2,
+    exactHit1:exactHit1,
+    exactHit2First:exactHit2First,
+    exactHit2Second:exactHit2Second,
+    exactPair2:exactPair2,
     numHits:numHits,
     cases:cases
   };
+}
+
+function _coldBucketLabel(value,bounds,labels){
+  for(var i=0;i<bounds.length;i++){
+    if(value<=bounds[i])return labels[i];
+  }
+  return labels[labels.length-1];
+}
+
+function _coldExactLabel(r){
+  var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
+  var parts=[];
+  if(rank>0&&rank<=2)parts.push('前2代表');
+  else if(rank>=6)parts.push('後段#'+rank);
+  else if(rank>0)parts.push('冷門#'+rank);
+  parts.push(_coldBucketLabel(dp,[39,59,79],['危<40','危40~59','危60~79','危80+']));
+  parts.push(_coldBucketLabel(heat,[9.9,14.9,19.9],['熱<10','熱10~15','熱15~20','熱20+']));
+  if(freq>=3)parts.push('近20出3+');
+  else parts.push('近20出'+freq);
+  parts.push(_coldBucketLabel(miss,[2,5,10],['漏≤2','漏3~5','漏6~10','漏11+']));
+  if(r.tiebreak)parts.push('平手');
+  return parts.join(' / ');
 }
 
 function _coldPrimaryCause(r){
@@ -3925,7 +3961,7 @@ function _renderColdCauseAnalysis(res){
   var cases=(res.cases||[]).map(function(c){
     var h=c.hits.map(function(x){
       var n=x.num<10?'0'+x.num:''+x.num;
-      return n+'（'+x.labels.join('、')+'）';
+      return n+'（'+x.exact+'）';
     }).join('、');
     return (c.date||'近期')+'：'+h;
   }).join('<br>');
@@ -3943,6 +3979,17 @@ function _renderColdCauseAnalysis(res){
     +'</div>'
     +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">中2配對結構</div>'
     +_coldTopRows(res.pairHit2,Math.max(1,res.hits2),5)+'</div>'
+    +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">精準命中拆解</div>'
+    +'<div style="font-size:.58rem;color:#64748b;line-height:1.55;margin-bottom:.08rem">中2第一顆/第二顆是依推薦選號順序拆解，用來看第二顆通常從哪個條件補撞。</div>'
+    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.08rem">中1撞到的完整條件</div>'
+    +_coldTopRows(res.exactHit1,Math.max(1,res.hits1),3)
+    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.16rem">中2第一顆條件</div>'
+    +_coldTopRows(res.exactHit2First,Math.max(1,res.hits2),3)
+    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.16rem">中2第二顆追加條件</div>'
+    +_coldTopRows(res.exactHit2Second,Math.max(1,res.hits2),3)
+    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.16rem">中2完整路徑</div>'
+    +_coldTopRows(res.exactPair2,Math.max(1,res.hits2),2)
+    +'</div>'
     +_coldTopNums(res.numHits)
     +(cases?'<div class="cold-cause-case">近期敗例：<br>'+cases+'</div>':'')
     +'<div class="cold-cause-sug">'+sug+'</div>'
