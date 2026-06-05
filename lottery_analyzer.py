@@ -1891,6 +1891,22 @@ tr.stripe td{background:#f8fafc}
 .cold-cause-sug{margin-top:.22rem;font-size:.6rem;color:#7c2d12;background:#fff7ed;
   border:1px solid #fed7aa;border-radius:.38rem;padding:.22rem .3rem;line-height:1.65}
 .cold-cause-case{font-size:.58rem;color:#475569;margin-top:.16rem;line-height:1.6}
+.cold-cause-expand{font-size:.6rem;border:none;border-radius:.35rem;background:#0369a1;
+  color:#fff;font-weight:800;padding:.16rem .42rem;cursor:pointer;white-space:nowrap}
+.cold-modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9998;
+  display:flex;align-items:center;justify-content:center;padding:1rem}
+.cold-modal{width:min(860px,96vw);max-height:88vh;overflow:auto;background:#f8fbff;
+  border:1px solid #93c5fd;border-radius:.7rem;box-shadow:0 18px 60px rgba(15,23,42,.35)}
+.cold-modal-head{position:sticky;top:0;background:#0f3c88;color:#fff;padding:.65rem .85rem;
+  display:flex;align-items:center;justify-content:space-between;gap:.8rem;z-index:1}
+.cold-modal-title{font-size:.95rem;font-weight:900}
+.cold-modal-close{border:1px solid rgba(255,255,255,.45);background:rgba(255,255,255,.14);
+  color:#fff;border-radius:.35rem;font-size:.78rem;font-weight:900;padding:.18rem .55rem;cursor:pointer}
+.cold-modal-body{padding:.85rem;font-size:.78rem;line-height:1.75;color:#1e293b}
+.cold-modal-body .cold-cause-card-title{font-size:.82rem}
+.cold-modal-body .cold-cause-row{font-size:.76rem;padding:.12rem 0}
+.cold-modal-body .cold-cause-case{font-size:.74rem}
+.cold-modal-body .cold-cause-sug{font-size:.74rem}
 @media(max-width:520px){.cold-cause-grid{grid-template-columns:1fr}}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
@@ -3772,7 +3788,7 @@ function renderColdFilterBacktest(key,periods){
   }
   var rate=res.total>0?Math.round(res.wins/res.total*1000)/10:0;
   var rateC=rate>=60?'#16a34a':rate>=45?'#d97706':'#dc2626';
-  var causeHtml=_renderColdCauseAnalysis(res);
+  var causeHtml=_renderColdCauseAnalysis(key,periods,res);
   el.innerHTML='<div class="cold-bt-result">'
     +'<div class="cold-bt-win-bar" style="color:'+rateC+'">'
     +'勝率 <span style="font-size:.75rem">'+rate+'%</span>'
@@ -3829,11 +3845,17 @@ function runColdFilterBacktest(key,periods){
         addCause(exactHit2Second,_coldExactLabel(hitRecs[1]));
         addCause(exactPair2,_coldExactLabel(hitRecs[0])+' → '+_coldExactLabel(hitRecs[1]));
       }
-      if(cases.length<3){
+      if(cases.length<8){
         cases.push({
           date:dh[i].date||'',
+          hitCount:hitCount,
           hits:hitRecs.map(function(r){
-            return{num:r.num,labels:_coldCauseLabels(r).slice(0,2),exact:_coldExactLabel(r)};
+            return{
+              num:r.num,
+              labels:_coldCauseLabels(r).slice(0,2),
+              exact:_coldExactLabel(r),
+              detail:_coldDetailedLine(r)
+            };
           })
         });
       }
@@ -3870,9 +3892,9 @@ function _coldExactLabel(r){
   var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
   var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
   var parts=[];
-  if(rank>0&&rank<=2)parts.push('前2代表');
-  else if(rank>=6)parts.push('後段#'+rank);
-  else if(rank>0)parts.push('冷門#'+rank);
+  if(rank>0&&rank<=2)parts.push('來源前2代表');
+  else if(rank>=6)parts.push('來源後段排行第'+rank);
+  else if(rank>0)parts.push('來源排行第'+rank);
   parts.push(_coldBucketLabel(dp,[39,59,79],['危<40','危40~59','危60~79','危80+']));
   parts.push(_coldBucketLabel(heat,[9.9,14.9,19.9],['熱<10','熱10~15','熱15~20','熱20+']));
   if(freq>=3)parts.push('近20出3+');
@@ -3880,6 +3902,25 @@ function _coldExactLabel(r){
   parts.push(_coldBucketLabel(miss,[2,5,10],['漏≤2','漏3~5','漏6~10','漏11+']));
   if(r.tiebreak)parts.push('平手');
   return parts.join(' / ');
+}
+
+function _coldDetailedLine(r){
+  var n=r.num<10?'0'+r.num:''+r.num;
+  var rank=Number(r.rank||0),heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),order=Number(r.order||0);
+  var source=rank>0
+    ?(rank<=2?'冷門前2代表':'冷門排行第'+rank+'名')
+    :'來源未知';
+  var bits=[
+    '推薦第'+(order||'?')+'顆 '+n,
+    '來源：'+source,
+    '危險度 '+dp+'%',
+    '熱力 '+Math.round(heat*10)/10+'%',
+    '近20期出現 '+freq+' 次',
+    '遺漏 '+miss+' 期'
+  ];
+  if(r.tiebreak)bits.push('熱力平手後用危險度挑出');
+  return bits.join('｜');
 }
 
 function _coldPrimaryCause(r){
@@ -3952,48 +3993,95 @@ function _coldCauseSuggestions(res){
   return out.slice(0,3);
 }
 
-function _renderColdCauseAnalysis(res){
+function _coldCaseDetails(res,limit){
+  var items=(res.cases||[]).slice(0,limit||5);
+  if(!items.length)return '';
+  return '<div class="cold-cause-case"><strong>近期命中案例：</strong><br>'
+    +items.map(function(c){
+      var rows=c.hits.map(function(x){
+        var n=x.num<10?'0'+x.num:''+x.num;
+        return '　'+n+'：'+x.detail;
+      }).join('<br>');
+      return '<div style="margin-top:.16rem"><strong>'+(c.date||'近期')+'（中'+c.hitCount+'）</strong><br>'+rows+'</div>';
+    }).join('')
+    +'</div>';
+}
+
+function _coldPreciseBlock(res,full){
+  var limit=full?8:4;
+  return '<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">精準命中拆解</div>'
+    +'<div style="font-size:.62rem;color:#64748b;line-height:1.6;margin-bottom:.12rem">'
+    +'中2第一顆/第二顆是依推薦選號順序拆解，用來看第二顆通常從哪個條件補撞。</div>'
+    +'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.08rem">中1撞到的完整條件</div>'
+    +_coldTopRows(res.exactHit1,Math.max(1,res.hits1),limit)
+    +'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.18rem">中2第二顆追加條件</div>'
+    +_coldTopRows(res.exactHit2Second,Math.max(1,res.hits2),limit)
+    +'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.18rem">中2完整路徑</div>'
+    +_coldTopRows(res.exactPair2,Math.max(1,res.hits2),full?6:3)
+    +(full?'<div class="cold-cause-card-title" style="font-size:.66rem;color:#475569;margin-top:.18rem">中2第一顆條件</div>'
+      +_coldTopRows(res.exactHit2First,Math.max(1,res.hits2),limit):'')
+    +'</div>';
+}
+
+function _renderColdCauseAnalysis(key,periods,res){
   var loss=res.total-res.wins;
   if(!loss)return '<div class="cold-cause-box"><div class="cold-cause-title">🧪 命中原因分析：近樣本全勝，暫無敗局可拆解</div></div>';
-  var hit1Den=Math.max(1,res.hits1);
-  var hit2Den=Math.max(1,res.hits2*2);
   var sug=_coldCauseSuggestions(res).map(function(s){return '<div>• '+s+'</div>';}).join('');
-  var cases=(res.cases||[]).map(function(c){
-    var h=c.hits.map(function(x){
-      var n=x.num<10?'0'+x.num:''+x.num;
-      return n+'（'+x.exact+'）';
-    }).join('、');
-    return (c.date||'近期')+'：'+h;
-  }).join('<br>');
   return '<details class="cold-cause-box" open>'
     +'<summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
+    +'<div style="display:flex;justify-content:flex-end;margin:-.18rem 0 .18rem">'
+    +'<button class="cold-cause-expand" onclick="openColdCauseModal(\''+key+'\','+periods+')">放大檢視</button>'
+    +'</div>'
     +'<div style="font-size:.6rem;color:#475569;margin-bottom:.18rem;line-height:1.6">'
     +'平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。'
     +'冷門前2名合計最多只取一支代表；若中2裡出現前2代表，表示兩顆命中裡其中一顆是它。'
-    +'下方「逐顆條件」是命中號碼本身的標籤；「中2配對」才是同一期兩顆一起命中的結構。</div>'
-    +'<div class="cold-cause-grid">'
-    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1逐顆條件</div>'
-    +_coldTopRows(res.causeHit1,hit1Den,4)+'</div>'
-    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中2命中號逐顆條件</div>'
-    +_coldTopRows(res.causeHit2,hit2Den,4)+'</div>'
-    +'</div>'
+    +'下方直接拆「中1怎麼撞到」與「中2第二顆怎麼補撞」。</div>'
+    +_coldPreciseBlock(res,false)
     +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">中2配對結構</div>'
     +_coldTopRows(res.pairHit2,Math.max(1,res.hits2),5)+'</div>'
-    +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">精準命中拆解</div>'
-    +'<div style="font-size:.58rem;color:#64748b;line-height:1.55;margin-bottom:.08rem">中2第一顆/第二顆是依推薦選號順序拆解，用來看第二顆通常從哪個條件補撞。</div>'
-    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.08rem">中1撞到的完整條件</div>'
-    +_coldTopRows(res.exactHit1,Math.max(1,res.hits1),3)
-    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.16rem">中2第一顆條件</div>'
-    +_coldTopRows(res.exactHit2First,Math.max(1,res.hits2),3)
-    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.16rem">中2第二顆追加條件</div>'
-    +_coldTopRows(res.exactHit2Second,Math.max(1,res.hits2),3)
-    +'<div class="cold-cause-card-title" style="font-size:.58rem;color:#475569;margin-top:.16rem">中2完整路徑</div>'
-    +_coldTopRows(res.exactPair2,Math.max(1,res.hits2),2)
-    +'</div>'
     +_coldTopNums(res.numHits)
-    +(cases?'<div class="cold-cause-case">近期敗例：<br>'+cases+'</div>':'')
+    +_coldCaseDetails(res,3)
     +'<div class="cold-cause-sug">'+sug+'</div>'
     +'</details>';
+}
+
+function _coldCauseModalContent(res){
+  var hit1Den=Math.max(1,res.hits1);
+  var hit2Den=Math.max(1,res.hits2*2);
+  var sug=_coldCauseSuggestions(res).map(function(s){return '<div>• '+s+'</div>';}).join('');
+  return '<div style="font-weight:800;color:#0f172a;margin-bottom:.45rem">'
+    +'平均每期中 '+res.avgHits+' 顆；敗局平均中 '+res.avgLossHits+' 顆。冷門前2名合計最多只取一支代表。</div>'
+    +_coldPreciseBlock(res,true)
+    +'<div class="cold-cause-card" style="margin-top:.5rem"><div class="cold-cause-card-title">中2配對結構</div>'
+    +_coldTopRows(res.pairHit2,Math.max(1,res.hits2),8)+'</div>'
+    +_coldCaseDetails(res,8)
+    +'<div class="cold-cause-grid" style="margin-top:.5rem">'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">逐顆統計：中1命中號</div>'
+    +_coldTopRows(res.causeHit1,hit1Den,6)+'</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">逐顆統計：中2命中號</div>'
+    +_coldTopRows(res.causeHit2,hit2Den,6)+'</div>'
+    +'</div>'
+    +'<div class="cold-cause-sug">'+sug+'</div>';
+}
+
+function openColdCauseModal(key,periods){
+  var cacheKey=key+'_'+periods;
+  var res=_coldBtCache[cacheKey]||runColdFilterBacktest(key,periods);
+  if(!res)return;
+  _coldBtCache[cacheKey]=res;
+  closeColdCauseModal();
+  var html='<div id="cold-cause-modal" class="cold-modal-backdrop" onclick="if(event.target===this)closeColdCauseModal()">'
+    +'<div class="cold-modal">'
+    +'<div class="cold-modal-head"><div class="cold-modal-title">命中原因放大檢視｜近'+periods+'期</div>'
+    +'<button class="cold-modal-close" onclick="closeColdCauseModal()">關閉</button></div>'
+    +'<div class="cold-modal-body">'+_coldCauseModalContent(res)+'</div>'
+    +'</div></div>';
+  document.body.insertAdjacentHTML('beforeend',html);
+}
+
+function closeColdCauseModal(){
+  var el=document.getElementById('cold-cause-modal');
+  if(el)el.remove();
 }
 
 function _computeColdRecSim(dh,histStart){
@@ -4089,6 +4177,7 @@ function _computeColdRecSim(dh,histStart){
     if(pi<2)top2Picked=true;
     selected.push({
       num:chosen,
+      order:selected.length+1,
       pi:pi,
       rank:pi+1,
       refDate:simPD[pi].ref_date||'',
