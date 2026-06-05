@@ -1867,6 +1867,18 @@ tr.stripe td{background:#f8fafc}
   margin:.22rem 0 .1rem}
 .cold-rec-reason{font-size:.56rem;color:#1e3a5f;line-height:1.55;
   border-top:1px solid #bae6fd;margin-top:.22rem;padding-top:.18rem}
+.cold-rule-editor{margin:.26rem 0 .3rem;background:rgba(255,255,255,.72);
+  border:1px solid #bae6fd;border-radius:.5rem;padding:.34rem .42rem}
+.cold-rule-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.28rem .38rem}
+.cold-rule-field{display:flex;flex-direction:column;gap:.12rem;font-size:.55rem;color:#075985;font-weight:800}
+.cold-rule-field input,.cold-rule-field select{height:1.65rem;border:1px solid #bae6fd;
+  border-radius:.34rem;background:#fff;color:#0f172a;font-size:.62rem;padding:0 .36rem;min-width:0}
+.cold-rule-checks{display:flex;gap:.42rem;flex-wrap:wrap;margin-top:.3rem;font-size:.58rem;color:#075985;font-weight:800}
+.cold-rule-actions{display:flex;gap:.28rem;justify-content:flex-end;margin-top:.34rem;flex-wrap:wrap}
+.cold-rule-actions button{font-size:.58rem;border:none;border-radius:.34rem;padding:.18rem .46rem;
+  cursor:pointer;font-weight:900;line-height:1.45}
+.cold-rule-apply{background:#0369a1;color:#fff}
+.cold-rule-reset{background:#e0f2fe;color:#075985;border:1px solid #7dd3fc!important}
 /* Cold-filter historical backtest (v12) */
 .cold-bt-section{border-top:1px solid #bae6fd;margin-top:.32rem;padding-top:.28rem}
 .cold-bt-tabs{display:flex;gap:.18rem;margin-bottom:.2rem;align-items:center}
@@ -1907,7 +1919,7 @@ tr.stripe td{background:#f8fafc}
 .cold-modal-body .cold-cause-row{font-size:.76rem;padding:.12rem 0}
 .cold-modal-body .cold-cause-case{font-size:.74rem}
 .cold-modal-body .cold-cause-sug{font-size:.74rem}
-@media(max-width:520px){.cold-cause-grid{grid-template-columns:1fr}}
+@media(max-width:520px){.cold-cause-grid,.cold-rule-grid{grid-template-columns:1fr}}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -3764,7 +3776,7 @@ var _coldBtPeriod={};
 
 function _coldFilterRule(key){
   var base={
-    label:'均衡低熱',
+    label:'手動條件',
     latestMaxFreq:4,
     coldTopPeriods:5,
     hotFreqCutoff:4,
@@ -3775,63 +3787,54 @@ function _coldFilterRule(key){
     latestSort:['heat','danger','freq','miss'],
     coldSort:['heat','danger','freq','miss']
   };
-  var map={
-    taiwan_539:{
-      label:'539 均衡低熱',
-      latestMaxFreq:4,
-      coldTopPeriods:5,
-      hotFreqCutoff:4,
-      maxMiss:20,
-      maxDanger:null,
-      excludeNeighbor:true,
-      excludeHeatZero:true,
-      latestSort:['heat','danger','freq','miss'],
-      coldSort:['heat','danger','freq','miss']
-    },
-    michigan_fantasy5:{
-      label:'密西根 嚴格防熱',
-      latestMaxFreq:3,
-      coldTopPeriods:4,
-      hotFreqCutoff:3,
-      maxMiss:18,
-      maxDanger:79,
-      excludeNeighbor:true,
-      excludeHeatZero:true,
-      latestSort:['danger','heat','freq','miss'],
-      coldSort:['danger','heat','freq','miss']
-    },
-    california_fantasy5:{
-      label:'加州 寬鬆回補',
-      latestMaxFreq:4,
-      coldTopPeriods:5,
-      hotFreqCutoff:4,
-      maxMiss:24,
-      maxDanger:null,
-      excludeNeighbor:false,
-      excludeHeatZero:true,
-      latestSort:['heat','danger','freq','miss'],
-      coldSort:['heat','freq','danger','miss']
-    },
-    newyork_take5:{
-      label:'紐約 短窗低熱',
-      latestMaxFreq:3,
-      coldTopPeriods:5,
-      hotFreqCutoff:3,
-      maxMiss:16,
-      maxDanger:89,
-      excludeNeighbor:true,
-      excludeHeatZero:true,
-      latestSort:['heat','danger','miss','freq'],
-      coldSort:['heat','danger','miss','freq']
-    }
-  };
-  var src=map[key]||{};
+  var src={};
+  try{
+    src=JSON.parse(localStorage.getItem('coldFilterRule_'+key)||'{}')||{};
+  }catch(e){
+    src={};
+  }
   var out={};
   Object.keys(base).forEach(function(k){out[k]=base[k];});
   Object.keys(src).forEach(function(k){out[k]=src[k];});
+  out.latestMaxFreq=Math.max(0,Math.min(20,parseInt(out.latestMaxFreq)||base.latestMaxFreq));
+  out.coldTopPeriods=Math.max(1,Math.min(5,parseInt(out.coldTopPeriods)||base.coldTopPeriods));
+  out.hotFreqCutoff=Math.max(1,Math.min(20,parseInt(out.hotFreqCutoff)||base.hotFreqCutoff));
+  out.maxMiss=Math.max(1,Math.min(80,parseInt(out.maxMiss)||base.maxMiss));
+  if(out.maxDanger===''||out.maxDanger===null||out.maxDanger===undefined){
+    out.maxDanger=null;
+  }else{
+    out.maxDanger=Math.max(0,Math.min(100,parseInt(out.maxDanger)));
+    if(isNaN(out.maxDanger))out.maxDanger=null;
+  }
+  out.excludeNeighbor=out.excludeNeighbor!==false;
+  out.excludeHeatZero=out.excludeHeatZero!==false;
   out.latestSort=(out.latestSort||base.latestSort).slice();
   out.coldSort=(out.coldSort||base.coldSort).slice();
   return out;
+}
+
+function _coldSortPreset(value){
+  var map={
+    heat:'heat,danger,freq,miss',
+    danger:'danger,heat,freq,miss',
+    freq:'freq,heat,danger,miss',
+    miss:'miss,heat,danger,freq'
+  };
+  return (map[value]||map.heat).split(',');
+}
+
+function _coldSortPresetValue(order){
+  var s=(order||[]).join(',');
+  if(s==='danger,heat,freq,miss')return 'danger';
+  if(s==='freq,heat,danger,miss')return 'freq';
+  if(s==='miss,heat,danger,freq')return 'miss';
+  return 'heat';
+}
+
+function _coldClearBtCache(key){
+  Object.keys(_coldBtCache).forEach(function(k){
+    if(k.indexOf(key+'_')===0)delete _coldBtCache[k];
+  });
 }
 
 function _coldStatValue(n,metric,fns){
@@ -3876,6 +3879,84 @@ function _coldRuleSummary(rule){
     +'｜漏≤'+rule.maxMiss
     +'｜'+dangerText
     +'｜'+(rule.excludeNeighbor?'排鄰號':'保留鄰號');
+}
+
+function _coldSortSelect(id,value){
+  var opts=[
+    ['heat','低熱力 → 低危險 → 近20低次數'],
+    ['danger','低危險 → 低熱力 → 近20低次數'],
+    ['freq','近20低次數 → 低熱力 → 低危險'],
+    ['miss','低遺漏 → 低熱力 → 低危險']
+  ];
+  return '<select id="'+id+'">'
+    +opts.map(function(o){
+      return '<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+o[1]+'</option>';
+    }).join('')
+    +'</select>';
+}
+
+function _coldRuleEditor(key,rule){
+  var dangerVal=rule.maxDanger===null||rule.maxDanger===undefined?'':rule.maxDanger;
+  return '<details class="cold-rule-editor">'
+    +'<summary style="cursor:pointer;list-style:none;font-size:.62rem;font-weight:900;color:#0369a1">'
+    +'▶ 手動調整篩選條件</summary>'
+    +'<div class="cold-rule-grid" style="margin-top:.32rem">'
+    +'<label class="cold-rule-field">當期代表近20上限'
+    +'<input id="cold-latest-'+key+'" type="number" min="0" max="20" step="1" value="'+rule.latestMaxFreq+'"></label>'
+    +'<label class="cold-rule-field">冷門排行取前幾期（最多5）'
+    +'<input id="cold-top-'+key+'" type="number" min="1" max="5" step="1" value="'+rule.coldTopPeriods+'"></label>'
+    +'<label class="cold-rule-field">過熱剔除門檻（近20≥）'
+    +'<input id="cold-hot-'+key+'" type="number" min="1" max="20" step="1" value="'+rule.hotFreqCutoff+'"></label>'
+    +'<label class="cold-rule-field">最大遺漏期數'
+    +'<input id="cold-miss-'+key+'" type="number" min="1" max="80" step="1" value="'+rule.maxMiss+'"></label>'
+    +'<label class="cold-rule-field">危險度上限（空白=不限制）'
+    +'<input id="cold-danger-'+key+'" type="number" min="0" max="100" step="1" value="'+dangerVal+'"></label>'
+    +'<label class="cold-rule-field">當期代表排序'
+    +_coldSortSelect('cold-latest-sort-'+key,_coldSortPresetValue(rule.latestSort))+'</label>'
+    +'<label class="cold-rule-field">冷門補號排序'
+    +_coldSortSelect('cold-cold-sort-'+key,_coldSortPresetValue(rule.coldSort))+'</label>'
+    +'</div>'
+    +'<div class="cold-rule-checks">'
+    +'<label><input id="cold-neighbor-'+key+'" type="checkbox" '+(rule.excludeNeighbor?'checked':'')+'> 排除當期鄰號</label>'
+    +'<label><input id="cold-heat0-'+key+'" type="checkbox" '+(rule.excludeHeatZero?'checked':'')+'> 排除熱力0%</label>'
+    +'</div>'
+    +'<div class="cold-rule-actions">'
+    +'<button class="cold-rule-reset" onclick="resetColdRuleSettings(\''+key+'\')">恢復預設</button>'
+    +'<button class="cold-rule-apply" onclick="applyColdRuleSettings(\''+key+'\')">套用條件</button>'
+    +'</div>'
+    +'</details>';
+}
+
+function applyColdRuleSettings(key){
+  function el(id){return document.getElementById(id+'-'+key);}
+  function intVal(id,def,min,max){
+    var v=parseInt((el(id)||{}).value);
+    if(isNaN(v))v=def;
+    return Math.max(min,Math.min(max,v));
+  }
+  var dangerRaw=((el('cold-danger')||{}).value||'').trim();
+  var danger=dangerRaw===''?null:Math.max(0,Math.min(100,parseInt(dangerRaw)||0));
+  var rule={
+    label:'手動條件',
+    latestMaxFreq:intVal('cold-latest',4,0,20),
+    coldTopPeriods:intVal('cold-top',5,1,5),
+    hotFreqCutoff:intVal('cold-hot',4,1,20),
+    maxMiss:intVal('cold-miss',20,1,80),
+    maxDanger:danger,
+    excludeNeighbor:!!((el('cold-neighbor')||{}).checked),
+    excludeHeatZero:!!((el('cold-heat0')||{}).checked),
+    latestSort:_coldSortPreset(((el('cold-latest-sort')||{}).value)||'heat'),
+    coldSort:_coldSortPreset(((el('cold-cold-sort')||{}).value)||'heat')
+  };
+  try{localStorage.setItem('coldFilterRule_'+key,JSON.stringify(rule));}catch(e){}
+  _coldClearBtCache(key);
+  renderColdFilterPanel(key);
+}
+
+function resetColdRuleSettings(key){
+  try{localStorage.removeItem('coldFilterRule_'+key);}catch(e){}
+  _coldClearBtCache(key);
+  renderColdFilterPanel(key);
 }
 
 function switchColdBt(key,periods){
@@ -4588,34 +4669,38 @@ function computeColdFilterRec(key){
 function renderColdFilterPanel(key){
   var el=document.getElementById('pk-cold-rec-'+key);
   if(!el)return;
-  var rec=computeColdFilterRec(key);
-  if(!rec||!rec.length){el.innerHTML='';return;}
   var rule=_coldFilterRule(key);
+  var rec=computeColdFilterRec(key)||[];
   function ns(n){return(n<10?'0':'')+n;}
-  var balls=rec.map(function(r){
-    return '<span class="ball-sm '+_clsBall(r.num)+'" '
-      +'style="width:1.65rem;height:1.65rem;font-size:.62rem;cursor:default">'+ns(r.num)+'</span>';
-  }).join('');
-  var reasons=rec.map(function(r,i){
-    return '<div style="padding:.1rem 0;border-bottom:1px solid rgba(125,211,252,.35)">'
-      +'<span style="font-weight:800;color:#0369a1">No.'+(i+1)+' </span>'
-      +'<span class="ball-sm '+_clsBall(r.num)+'" style="width:.9rem;height:.9rem;'
-      +'font-size:.42rem;vertical-align:middle">'+ns(r.num)+'</span> '
-      +r.reason+'</div>';
-  }).join('');
+  var balls=rec.length
+    ?rec.map(function(r){
+      return '<span class="ball-sm '+_clsBall(r.num)+'" '
+        +'style="width:1.65rem;height:1.65rem;font-size:.62rem;cursor:default">'+ns(r.num)+'</span>';
+    }).join('')
+    :'<span style="font-size:.62rem;color:#64748b;font-weight:800">目前條件篩不出號碼，請放寬下方條件</span>';
+  var reasons=rec.length
+    ?rec.map(function(r,i){
+      return '<div style="padding:.1rem 0;border-bottom:1px solid rgba(125,211,252,.35)">'
+        +'<span style="font-weight:800;color:#0369a1">No.'+(i+1)+' </span>'
+        +'<span class="ball-sm '+_clsBall(r.num)+'" style="width:.9rem;height:.9rem;'
+        +'font-size:.42rem;vertical-align:middle">'+ns(r.num)+'</span> '
+        +r.reason+'</div>';
+    }).join('')
+    :'<div style="color:#64748b">目前條件沒有產生可帶入的 5 支號碼。</div>';
   var nums=rec.map(function(r){return r.num;});
   var activePeriods=_coldBtPeriod[key]||30;
   el.innerHTML='<div class="cold-rec-panel">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
     +'<span style="font-size:.62rem;font-weight:800;color:#0c4a6e">🧊 冷門過濾智能推薦｜'+rule.label+'</span>'
-    +'<button onclick="applyRecToSel(\''+key+'\',['+nums.join(',')+'])" '
+    +(nums.length?'<button onclick="applyRecToSel(\''+key+'\',['+nums.join(',')+'])" '
     +'style="font-size:.57rem;padding:.1rem .3rem;border:none;border-radius:.28rem;'
     +'background:#0369a1;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">'
-    +'一鍵帶入選號盤</button>'
+    +'一鍵帶入選號盤</button>':'<span style="font-size:.57rem;color:#64748b;font-weight:800">無可帶入號碼</span>')
     +'</div>'
     +'<div style="font-size:.55rem;color:#075985;line-height:1.45;margin:-.02rem 0 .18rem">'
     +'策略門檻：'+_coldRuleSummary(rule)+'</div>'
     +'<div class="cold-rec-balls">'+balls+'</div>'
+    +_coldRuleEditor(key,rule)
     +'<details style="margin-top:.06rem">'
     +'<summary style="font-size:.57rem;color:#0369a1;cursor:pointer;list-style:none;'
     +'font-weight:600;padding:.05rem 0">▶ 查看推理過程</summary>'
@@ -6234,16 +6319,14 @@ def _create_flask_app(data_dir: Path, output_path: Path, run_init: bool = True):
             "version": version_value[:16],
             "source_has_new_cold_rule": (
                 "function _coldFilterRule" in source
-                and "michigan_fantasy5" in source
-                and "california_fantasy5" in source
-                and "newyork_take5" in source
+                and "function applyColdRuleSettings" in source
+                and "function resetColdRuleSettings" in source
             ),
             "html_has_new_cold_rule": (
                 "策略門檻" in html
-                and "539 均衡低熱" in html
-                and "密西根 嚴格防熱" in html
-                and "加州 寬鬆回補" in html
-                and "紐約 短窗低熱" in html
+                and "手動調整篩選條件" in html
+                and "套用條件" in html
+                and "恢復預設" in html
             ),
             "html_has_old_top2_rule": (
                 "冷門前2" in html or "前2代表" in html or "冷門Top2" in html
