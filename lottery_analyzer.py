@@ -1877,6 +1877,19 @@ tr.stripe td{background:#f8fafc}
 .cold-bt-result{font-size:.58rem;line-height:1.6}
 .cold-bt-win-bar{font-weight:800;margin-bottom:.1rem}
 .cold-bt-hits{color:#475569;margin-top:.06rem}
+.cold-cause-box{margin-top:.24rem;border-top:1px dashed #93c5fd;padding-top:.22rem}
+.cold-cause-title{font-size:.56rem;font-weight:800;color:#0c4a6e;margin-bottom:.12rem}
+.cold-cause-grid{display:grid;grid-template-columns:1fr 1fr;gap:.22rem}
+.cold-cause-card{background:rgba(255,255,255,.68);border:1px solid #bae6fd;
+  border-radius:.38rem;padding:.2rem .28rem}
+.cold-cause-card-title{font-size:.54rem;font-weight:800;color:#0369a1;margin-bottom:.08rem}
+.cold-cause-row{display:flex;justify-content:space-between;gap:.22rem;font-size:.54rem;
+  color:#334155;border-bottom:1px solid rgba(186,230,253,.45);padding:.04rem 0}
+.cold-cause-row:last-child{border-bottom:none}
+.cold-cause-sug{margin-top:.16rem;font-size:.54rem;color:#7c2d12;background:#fff7ed;
+  border:1px solid #fed7aa;border-radius:.35rem;padding:.16rem .24rem;line-height:1.5}
+.cold-cause-case{font-size:.52rem;color:#475569;margin-top:.12rem;line-height:1.45}
+@media(max-width:520px){.cold-cause-grid{grid-template-columns:1fr}}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -3757,6 +3770,7 @@ function renderColdFilterBacktest(key,periods){
   }
   var rate=res.total>0?Math.round(res.wins/res.total*1000)/10:0;
   var rateC=rate>=60?'#16a34a':rate>=45?'#d97706':'#dc2626';
+  var causeHtml=_renderColdCauseAnalysis(res);
   el.innerHTML='<div class="cold-bt-result">'
     +'<div class="cold-bt-win-bar" style="color:'+rateC+'">'
     +'勝率 <span style="font-size:.75rem">'+rate+'%</span>'
@@ -3766,29 +3780,147 @@ function renderColdFilterBacktest(key,periods){
     +'<span style="color:#dc2626;font-weight:700">中1顆('+res.hits1+'次)</span> | '
     +'<span style="color:#c2410c;font-weight:700">中2顆('+res.hits2+'次)</span> | '
     +'<span style="color:#7c3aed;font-weight:700">中3顆+('+res.hits3p+'次)</span>'
-    +'</div></div>';
+    +'</div>'+causeHtml+'</div>';
 }
 
 function runColdFilterBacktest(key,periods){
   var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
   if(dh.length<periods+5)return null;
-  var wins=0,hits1=0,hits2=0,hits3p=0;
-  var total=Math.min(periods,dh.length-2);
-  for(var i=0;i<total;i++){
+  var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
+  var causeAll={},causeHit1={},causeHit2={},causeHit3p={},numHits={},cases=[];
+  var maxTrials=Math.min(periods,dh.length-2);
+  function addCause(bucket,label){bucket[label]=(bucket[label]||0)+1;}
+  for(var i=0;i<maxTrials;i++){
     var actualNums=dh[i].numbers;
     var histStart=i+1;
     var simRec=_computeColdRecSim(dh,histStart);
     if(!simRec||!simRec.length)continue;
-    var hitCount=0;
+    total++;
+    var hitCount=0,hitRecs=[];
     for(var ri=0;ri<simRec.length;ri++){
-      if(actualNums.indexOf(simRec[ri].num)!==-1)hitCount++;
+      if(actualNums.indexOf(simRec[ri].num)!==-1){
+        hitCount++;
+        hitRecs.push(simRec[ri]);
+      }
     }
+    hitSum+=hitCount;
     if(hitCount===0)wins++;
     else if(hitCount===1)hits1++;
     else if(hitCount===2)hits2++;
     else hits3p++;
+    if(hitRecs.length){
+      var bucket=hitCount===1?causeHit1:(hitCount===2?causeHit2:causeHit3p);
+      hitRecs.forEach(function(r){
+        numHits[r.num]=(numHits[r.num]||0)+1;
+        _coldCauseLabels(r).forEach(function(label){
+          addCause(causeAll,label);
+          addCause(bucket,label);
+        });
+      });
+      if(cases.length<3){
+        cases.push({
+          date:dh[i].date||'',
+          hits:hitRecs.map(function(r){
+            return{num:r.num,labels:_coldCauseLabels(r).slice(0,2)};
+          })
+        });
+      }
+    }
   }
-  return{total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p};
+  var loss=total-wins;
+  return{
+    total:total,wins:wins,hits1:hits1,hits2:hits2,hits3p:hits3p,
+    hitSum:hitSum,
+    avgHits:total?Math.round(hitSum/total*100)/100:0,
+    avgLossHits:loss?Math.round(hitSum/loss*100)/100:0,
+    causeAll:causeAll,
+    causeHit1:causeHit1,
+    causeHit2:causeHit2,
+    causeHit3p:causeHit3p,
+    numHits:numHits,
+    cases:cases
+  };
+}
+
+function _coldCauseLabels(r){
+  var labels=[];
+  var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
+  if(freq>=3)labels.push('近20期出現3次以上');
+  else if(freq===2)labels.push('近20期出現2次');
+  if(heat>=20)labels.push('熱力≥20%');
+  else if(heat>=15)labels.push('熱力15~20%');
+  else if(heat>=10)labels.push('熱力10~15%');
+  if(miss<=2)labels.push('遺漏≤2期');
+  else if(miss<=5)labels.push('遺漏3~5期');
+  if(dp>=80)labels.push('危險度≥80%');
+  else if(dp>=60)labels.push('危險度60~79%');
+  if(rank>=6)labels.push('補位到冷門第6期後');
+  else if(rank>0&&rank<=2)labels.push('來自冷門Top2');
+  if(r.tiebreak)labels.push('熱力平手由危險度決定');
+  if(!labels.length)labels.push('無明顯單一條件');
+  return labels;
+}
+
+function _coldTopRows(map,denom,limit){
+  var rows=Object.keys(map||{}).map(function(k){return[k,map[k]];})
+    .sort(function(a,b){return b[1]-a[1];}).slice(0,limit||4);
+  if(!rows.length)return '<div class="cold-cause-row"><span>樣本不足</span><strong>--</strong></div>';
+  return rows.map(function(r){
+    var pct=denom?Math.round(r[1]/denom*100):0;
+    return '<div class="cold-cause-row"><span>'+r[0]+'</span><strong>'+r[1]+'次 · '+pct+'%</strong></div>';
+  }).join('');
+}
+
+function _coldTopNums(map){
+  function ns(n){n=parseInt(n);return(n<10?'0':'')+n;}
+  var rows=Object.keys(map||{}).map(function(k){return[k,map[k]];})
+    .sort(function(a,b){return b[1]-a[1];}).slice(0,5);
+  if(!rows.length)return '';
+  return '<div class="cold-cause-case">常命中號：'
+    +rows.map(function(r){return ns(r[0])+'×'+r[1];}).join('、')+'</div>';
+}
+
+function _coldCauseSuggestions(res){
+  var all=res.causeAll||{},hitSum=Math.max(1,res.hitSum||0),out=[];
+  function share(label){return(all[label]||0)/hitSum;}
+  if(share('近20期出現3次以上')>=.22)out.push('可測試把過熱(C)門檻由近20期≥4次改成≥3次。');
+  if((share('熱力≥20%')+share('熱力15~20%'))>=.28)out.push('可加熱力上限，例如只收熱力低於15%的候選。');
+  if((share('遺漏≤2期')+share('遺漏3~5期'))>=.30)out.push('可避開剛出不久的號碼，例如遺漏需大於5期。');
+  if((share('危險度≥80%')+share('危險度60~79%'))>=.25)out.push('可加危險度上限，例如危險度低於60%才納入。');
+  if(share('補位到冷門第6期後')>=.18)out.push('可限制只用冷門Top5，減少後段補位號。');
+  if(!out.length)out.push('目前命中原因分散，建議先觀察更多期數，不急著調門檻。');
+  return out.slice(0,3);
+}
+
+function _renderColdCauseAnalysis(res){
+  var loss=res.total-res.wins;
+  if(!loss)return '<div class="cold-cause-box"><div class="cold-cause-title">🧪 命中原因分析：近樣本全勝，暫無敗局可拆解</div></div>';
+  var hit1Den=Math.max(1,res.hits1);
+  var hit2Den=Math.max(1,res.hits2*2);
+  var sug=_coldCauseSuggestions(res).map(function(s){return '<div>• '+s+'</div>';}).join('');
+  var cases=(res.cases||[]).map(function(c){
+    var h=c.hits.map(function(x){
+      var n=x.num<10?'0'+x.num:''+x.num;
+      return n+'（'+x.labels.join('、')+'）';
+    }).join('、');
+    return (c.date||'近期')+'：'+h;
+  }).join('<br>');
+  return '<details class="cold-cause-box" open>'
+    +'<summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
+    +'<div style="font-size:.55rem;color:#475569;margin-bottom:.14rem">'
+    +'平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。'
+    +'以下為命中號碼當下條件統計，同一顆可能同時符合多個條件。</div>'
+    +'<div class="cold-cause-grid">'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1顆常見條件</div>'
+    +_coldTopRows(res.causeHit1,hit1Den,4)+'</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中2顆常見條件</div>'
+    +_coldTopRows(res.causeHit2,hit2Den,4)+'</div>'
+    +'</div>'
+    +_coldTopNums(res.numHits)
+    +(cases?'<div class="cold-cause-case">近期敗例：<br>'+cases+'</div>':'')
+    +'<div class="cold-cause-sug">'+sug+'</div>'
+    +'</details>';
 }
 
 function _computeColdRecSim(dh,histStart){
@@ -3805,7 +3937,7 @@ function _computeColdRecSim(dh,histStart){
   for(var j=histStart+1;j<Math.min(histStart+51,dh.length);j++){
     var ov=0;
     for(var k=0;k<dh[j].numbers.length;k++){if(recentSet[dh[j].numbers[k]])ov++;}
-    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov});
+    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov,ref_date:dh[j].date||''});
   }
   periodCands.sort(function(a,b){return a.overlap-b.overlap;});
   var simPD=periodCands.slice(0,8);
@@ -3878,8 +4010,20 @@ function _computeColdRecSim(dh,histStart){
       return dp2(a)-dp2(b);
     });
     var chosen=remaining[0];
+    var tiedNums=remaining.filter(function(n){return hs(n)===hs(chosen);});
     usedNums[chosen]=true;
-    selected.push({num:chosen});
+    selected.push({
+      num:chosen,
+      pi:pi,
+      rank:pi+1,
+      refDate:simPD[pi].ref_date||'',
+      overlap:simPD[pi].overlap,
+      heat:hs(chosen),
+      dp:dp2(chosen),
+      miss:cm(chosen),
+      recentFreq:simNHD[chosen]?(simNHD[chosen].recent_freq||0):0,
+      tiebreak:tiedNums.length>1
+    });
   }
   return selected.length?selected:null;
 }
