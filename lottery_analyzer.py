@@ -1942,6 +1942,19 @@ tr.stripe td{background:#f8fafc}
 .cold-modal-body .cold-cause-case{font-size:.74rem}
 .cold-modal-body .cold-cause-sug{font-size:.74rem}
 @media(max-width:520px){.cold-cause-grid,.cold-rule-grid,.miss-rank-grid{grid-template-columns:1fr}}
+/* ── v13: 連敗警報 / 共識面板 / 陷阱率 / 自適應參數 / 五選中一 ── */
+.streak-alert-box{border-radius:.45rem;padding:.26rem .42rem;margin-bottom:.22rem;font-size:.6rem;font-weight:700;display:flex;align-items:center;gap:.3rem;line-height:1.5}
+.streak-alert-warn{background:#fef3c7;border:1px solid #fcd34d;color:#92400e}
+.streak-alert-danger{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b}
+.consensus-panel{background:#f0fdf4;border:1px solid #86efac;border-radius:.45rem;padding:.26rem .42rem;margin:.2rem 0;font-size:.57rem;line-height:1.55}
+.trap-section{border-top:1px solid #e0f2fe;margin-top:.26rem;padding-top:.2rem}
+.trap-row{display:flex;align-items:center;gap:.28rem;padding:.06rem 0;border-bottom:1px solid #f0f9ff;font-size:.56rem}
+.param-scan-box{border-top:1px solid #bae6fd;margin-top:.26rem;padding-top:.2rem}
+.param-scan-result{background:#f0fdf4;border:1.5px solid #86efac;border-radius:.38rem;padding:.2rem .36rem;font-size:.57rem;margin-top:.1rem;line-height:1.55}
+.one-hit-panel{background:linear-gradient(135deg,#fdf4ff,#fae8ff);border:1.5px solid #d8b4fe;border-radius:.6rem;padding:.38rem .48rem;margin-top:.28rem}
+.one-hit-bt-tabs{display:flex;gap:.16rem;margin-bottom:.18rem;align-items:center}
+.one-hit-bt-tab{font-size:.55rem;padding:.1rem .26rem;border:1px solid #d8b4fe;border-radius:.28rem;background:#fff;color:#7e22ce;cursor:pointer;font-weight:600;line-height:1.5;transition:background .1s,color .1s}
+.one-hit-bt-tab.active{background:#7e22ce;color:#fff;border-color:#7e22ce}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -3531,7 +3544,8 @@ function _btStore(key,d){
   if(d.rev_oe_data){      window._REV_OE_DATA=window._REV_OE_DATA||{};      window._REV_OE_DATA[key]=d.rev_oe_data; }
   if(d.draw_history_data){window._DRAW_HISTORY=window._DRAW_HISTORY||{};    window._DRAW_HISTORY[key]=d.draw_history_data;
     // Invalidate backtest cache for this key when draw history changes
-    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];});
+    [30,50,100].forEach(function(p){delete _coldBtCache[key+'_'+p];delete _oneHitBtCache[key+'_'+p];});
+    delete _autoParamCache[key+'_50'];
     _missRankClearBtCache(key);
   }
 }
@@ -4594,6 +4608,32 @@ function renderColdFilterBacktest(key,periods){
   var rate=res.total>0?Math.round(res.wins/res.total*1000)/10:0;
   var rateC=rate>=60?'#16a34a':rate>=45?'#d97706':'#dc2626';
   var causeHtml=_renderColdCauseAnalysis(key,periods,res);
+  // Trap rate: top-3 numbers with highest hit/rec ratio (min 5 recommendations)
+  var trapHtml='';
+  if(res.numRec){
+    var trapList=Object.keys(res.numRec).map(function(n){
+      var rec=res.numRec[n],hit=res.numHits[n]||0;
+      return{num:parseInt(n),rec:rec,hit:hit,rate:rec>=5?Math.round(hit/rec*100):null};
+    }).filter(function(x){return x.rate!==null&&x.rate>=25;})
+      .sort(function(a,b){return b.rate-a.rate||b.hit-a.hit;}).slice(0,3);
+    if(trapList.length){
+      trapHtml='<div class="trap-section"><span style="font-size:.58rem;font-weight:800;color:#7c2d12">🚨 陷阱號（推薦卻被開出比例偏高）：</span>'
+        +trapList.map(function(x){
+          var ns=x.num<10?'0'+x.num:''+x.num;
+          var c=x.rate>=50?'#dc2626':x.rate>=35?'#c2410c':'#d97706';
+          return '<span class="trap-row" style="display:inline-flex;margin:.06rem .14rem 0 0">'
+            +'<span class="ball-sm '+_clsBall(x.num)+'" style="width:1.1rem;height:1.1rem;font-size:.46rem;flex-shrink:0">'+ns+'</span>'
+            +'<span style="color:'+c+';font-weight:700">'+x.rate+'%</span>'
+            +'<span style="color:#64748b">(推'+x.rec+'次·中'+x.hit+'次)</span>'
+            +'</span>';
+        }).join('')+'</div>';
+    }
+  }
+  var oneHitRate=res.total>0?Math.round(res.hits1/res.total*1000)/10:0;
+  var dirHtml='<div style="margin-top:.1rem;font-size:.56rem;color:#475569">'
+    +'策略方向：<span style="font-weight:700;color:'+(rate>oneHitRate?'#16a34a':'#7e22ce')+'">五不中勝率 '+rate+'%</span>'
+    +' vs <span style="font-weight:700;color:'+(oneHitRate>=rate?'#7e22ce':'#94a3b8')+'">五選中一率 '+oneHitRate+'%</span>'
+    +' — 建議優先打 <strong>'+(rate>=oneHitRate?'五不中':'五選中一')+'</strong></div>';
   el.innerHTML='<div class="cold-bt-result">'
     +'<div class="cold-bt-win-bar" style="color:'+rateC+'">'
     +'勝率 <span style="font-size:.75rem">'+rate+'%</span>'
@@ -4603,7 +4643,7 @@ function renderColdFilterBacktest(key,periods){
     +'<span style="color:#dc2626;font-weight:700">中1顆('+res.hits1+'次)</span> | '
     +'<span style="color:#c2410c;font-weight:700">中2顆('+res.hits2+'次)</span> | '
     +'<span style="color:#7c3aed;font-weight:700">中3顆+('+res.hits3p+'次)</span>'
-    +'</div>'+causeHtml+'</div>';
+    +'</div>'+dirHtml+trapHtml+causeHtml+'</div>';
 }
 
 function runColdFilterBacktest(key,periods){
@@ -4611,7 +4651,7 @@ function runColdFilterBacktest(key,periods){
   if(dh.length<periods+5)return null;
   var rule=_coldFilterRule(key);
   var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
-  var causeAll={},causeHit1={},causeHit2={},causeHit3p={},pairHit2={},numHits={},cases=[];
+  var causeAll={},causeHit1={},causeHit2={},causeHit3p={},pairHit2={},numHits={},numRec={},cases=[];
   var exactHit1={},exactHit2First={},exactHit2Second={},exactPair2={};
   var maxTrials=Math.min(periods,dh.length-2);
   function addCause(bucket,label){bucket[label]=(bucket[label]||0)+1;}
@@ -4621,6 +4661,7 @@ function runColdFilterBacktest(key,periods){
     var simRec=_computeColdRecSim(key,dh,histStart);
     if(!simRec||!simRec.length)continue;
     total++;
+    simRec.forEach(function(r){numRec[r.num]=(numRec[r.num]||0)+1;});
     var hitCount=0,hitRecs=[];
     for(var ri=0;ri<simRec.length;ri++){
       if(actualNums.indexOf(simRec[ri].num)!==-1){
@@ -4684,6 +4725,7 @@ function runColdFilterBacktest(key,periods){
     exactHit2Second:exactHit2Second,
     exactPair2:exactPair2,
     numHits:numHits,
+    numRec:numRec,
     cases:cases
   };
 }
@@ -5274,6 +5316,345 @@ function computeColdFilterRec(key){
   return selected.length?selected:null;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   v13 優化模組：連敗警報 / 共識面板 / 自適應參數 / 五選中一模式
+   所有回測均採走前驗證，對每個預測期 T 僅使用 T 之前的歷史資料
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ① 連敗警報：檢查最近 N 期是否連續命中（五不中連敗） */
+function computeStreakAlert(key){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<4)return 0;
+  var streak=0;
+  for(var i=0;i<Math.min(6,dh.length-1);i++){
+    var simRec=_computeColdRecSim(key,dh,i+1);
+    if(!simRec||!simRec.length)break;
+    var actual=dh[i].numbers;
+    var hit=false;
+    for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1){hit=true;break;}}
+    if(hit)streak++;
+    else break;
+  }
+  return streak;
+}
+
+/* ② 雙策略共識面板：對比 冷門 vs 遺漏排行 的推薦交集與分歧 */
+function renderConsensusPanel(key){
+  var el=document.getElementById('pk-consensus-'+key);
+  if(!el)return;
+  var coldRec=computeColdFilterRec(key)||[];
+  var missRec=computeMissRankFilterRec(key)||[];
+  if(!coldRec.length&&!missRec.length){el.innerHTML='';return;}
+  var coldSet={},missSet={};
+  function ns(n){return(n<10?'0':'')+n;}
+  coldRec.forEach(function(r){coldSet[r.num]=true;});
+  missRec.forEach(function(r){missSet[r.num]=true;});
+  var both=[],coldOnly=[],missOnly=[];
+  Object.keys(coldSet).forEach(function(n){n=parseInt(n);(missSet[n]?both:coldOnly).push(n);});
+  Object.keys(missSet).forEach(function(n){n=parseInt(n);if(!coldSet[n])missOnly.push(n);});
+  function ball(n,label){
+    return '<span title="'+label+'" class="ball-sm '+_clsBall(n)+'" style="width:1.3rem;height:1.3rem;font-size:.52rem;cursor:default">'+ns(n)+'</span>';
+  }
+  var html='<div class="consensus-panel">';
+  if(both.length){
+    html+='<div><span style="font-weight:800;color:#15803d">共識安全號（兩套均推薦）：</span>';
+    html+=both.map(function(n){return ball(n,'共識');}).join(' ')+'</div>';
+  }
+  if(coldOnly.length||missOnly.length){
+    html+='<div style="margin-top:.12rem">';
+    if(coldOnly.length){html+='<span style="font-weight:700;color:#0369a1">冷門獨推：</span>'+coldOnly.map(function(n){return ball(n,'冷門獨推');}).join(' ')+'　';}
+    if(missOnly.length){html+='<span style="font-weight:700;color:#c2410c">遺漏獨推：</span>'+missOnly.map(function(n){return ball(n,'遺漏獨推');}).join(' ');}
+    html+='</div>';
+    html+='<div style="margin-top:.1rem;font-size:.54rem;color:#475569">共識號 = 優先五不中；分歧號 = 可考慮作五選中一主力號</div>';
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+/* ③ 自適應參數掃描：走前驗證，絕不讀取未來號碼 */
+/* _computeColdRecSimWithParams: 與 _computeColdRecSim 邏輯完全相同，
+   但改用傳入的 params 物件，不從 localStorage 讀規則，徹底隔絕未來資料 */
+function _computeColdRecSimWithParams(dh,histStart,params){
+  if(histStart>=dh.length)return null;
+  var poolSize=39;
+  var maxMiss=params.maxMiss||20,hotFreqCutoff=params.hotFreqCutoff||4;
+  var excludeNeighbor=params.excludeNeighbor!==false;
+  var recentSet={};
+  for(var j=histStart;j<Math.min(histStart+8,dh.length);j++){
+    for(var k=0;k<dh[j].numbers.length;k++)recentSet[dh[j].numbers[k]]=true;
+  }
+  var periodCands=[];
+  for(var j=histStart+1;j<Math.min(histStart+51,dh.length);j++){
+    var ov=0;for(var k=0;k<dh[j].numbers.length;k++){if(recentSet[dh[j].numbers[k]])ov++;}
+    periodCands.push({ref_numbers:dh[j].numbers,overlap:ov});
+  }
+  periodCands.sort(function(a,b){return a.overlap-b.overlap;});
+  var simPD=periodCands.slice(0,8);
+  var latestNums=dh[histStart].numbers;
+  var lastSet={},neighborSet={};
+  for(var k=0;k<latestNums.length;k++){
+    lastSet[latestNums[k]]=true;
+    var n=latestNums[k];
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
+  }
+  var histEnd=Math.min(histStart+101,dh.length);
+  var histDraws=[];for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
+  var simNHD={},simHPD={},hotSet={};
+  for(var n=1;n<=poolSize;n++){
+    var miss=0;
+    if(latestNums.indexOf(n)!==-1){miss=0;}
+    else{for(var j=histStart+1;j<dh.length;j++){if(dh[j].numbers.indexOf(n)!==-1)break;miss++;if(miss>50)break;}}
+    var freq=0;for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){if(dh[j].numbers.indexOf(n)!==-1)freq++;}
+    var gaps=[],lastA=-1;
+    for(var j=0;j<histDraws.length;j++){
+      if(histDraws[j].indexOf(n)!==-1){if(lastA!==-1)gaps.push(j-lastA);lastA=j;}
+    }
+    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
+    simNHD[n]={current_miss:miss,recent_freq:freq,danger_pct:Math.min(100,Math.round(miss/Math.max(1,avgGap)*100)),avg_gap:avgGap};
+    var hits50=0,tot50=Math.min(50,histDraws.length);
+    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
+    simHPD[n]={next_hit_rate:tot50?Math.round(hits50/tot50*1000)/10:0};
+    if(freq>=hotFreqCutoff)hotSet[n]=true;
+  }
+  function hs(n){var hp=simHPD[n];return hp?hp.next_hit_rate:(simNHD[n]?simNHD[n].recent_freq:0);}
+  function dp2(n){return simNHD[n]?simNHD[n].danger_pct:0;}
+  function cm(n){return simNHD[n]?simNHD[n].current_miss:0;}
+  var selected=[],usedNums={};
+  for(var pi=0;pi<Math.min(8,simPD.length)&&selected.length<5;pi++){
+    var cands=(simPD[pi].ref_numbers||[]).slice();
+    var remaining=cands.filter(function(n){
+      if(lastSet[n])return false;
+      if(excludeNeighbor&&neighborSet[n])return false;
+      if(hotSet[n])return false;
+      if(cm(n)>maxMiss)return false;
+      if(usedNums[n])return false;
+      return true;
+    });
+    if(!remaining.length)remaining=cands.filter(function(n){return !lastSet[n]&&!usedNums[n];});
+    if(!remaining.length)continue;
+    remaining.sort(function(a,b){var ha=hs(a),hb=hs(b);if(ha!==hb)return ha-hb;return dp2(a)-dp2(b);});
+    usedNums[remaining[0]]=true;
+    selected.push({num:remaining[0]});
+  }
+  return selected.length?selected:null;
+}
+
+var _autoParamCache={};
+function _autoParamScan(key,periods){
+  /* 走前驗證：每期預測只用該期「之前」的歷史，絕無未來資料 */
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var grid=[];
+  [10,15,20,25,30].forEach(function(mm){
+    [3,4,5].forEach(function(hf){grid.push({maxMiss:mm,hotFreqCutoff:hf});});
+  });
+  var best=null,bestRate=-1;
+  var maxTrials=Math.min(periods,dh.length-2);
+  grid.forEach(function(params){
+    var wins=0,total=0;
+    for(var i=0;i<maxTrials;i++){
+      var simRec=_computeColdRecSimWithParams(dh,i+1,params);
+      if(!simRec||!simRec.length)continue;
+      total++;
+      var actual=dh[i].numbers,hit=0;
+      for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1)hit++;}
+      if(hit===0)wins++;
+    }
+    if(total<10)return;
+    var rate=wins/total;
+    if(rate>bestRate){bestRate=rate;best={params:params,wins:wins,total:total,rate:rate};}
+  });
+  return best;
+}
+function applyParamSuggestion(key,mm,hf){
+  var rule=_coldFilterRule(key);rule.maxMiss=mm;rule.hotFreqCutoff=hf;
+  try{localStorage.setItem('coldFilterRule_'+key,JSON.stringify(rule));}catch(e){}
+  _coldClearBtCache(key);delete _autoParamCache[key+'_50'];
+  renderColdFilterPanel(key);
+}
+function renderAutoParamSuggestion(key){
+  var el=document.getElementById('pk-param-scan-'+key);
+  if(!el)return;
+  el.innerHTML='<span style="color:#475569;font-size:.57rem">掃描中（15組參數×近50期走前驗證）…</span>';
+  setTimeout(function(){
+    var cacheKey=key+'_50';
+    var res=_autoParamCache[cacheKey];
+    if(!res){res=_autoParamScan(key,50);if(res)_autoParamCache[cacheKey]=res;}
+    if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足，無法掃描</span>';return;}
+    var rule=_coldFilterRule(key);
+    var rate=Math.round(res.rate*1000)/10;
+    var rateC=rate>=55?'#16a34a':rate>=48?'#d97706':'#dc2626';
+    var changed=(res.params.maxMiss!==rule.maxMiss||res.params.hotFreqCutoff!==rule.hotFreqCutoff);
+    el.innerHTML='<div class="param-scan-result">'
+      +'<div style="font-weight:800;color:'+rateC+'">最優建議：遺漏上限 <strong>'+res.params.maxMiss+'</strong> 期｜過熱頻次 ≥<strong>'+res.params.hotFreqCutoff+'</strong> 次 → 勝率 '+rate+'%（'+res.wins+'/'+res.total+'期）</div>'
+      +'<div style="color:#475569;margin-top:.07rem;font-size:.54rem">'+(changed?'目前設定與最優不同':'目前設定已與最優相符')+'（純走前驗證，每期預測僅用該期之前的歷史資料）</div>'
+      +(changed?'<button onclick="applyParamSuggestion(\''+key+'\','+res.params.maxMiss+','+res.params.hotFreqCutoff+')" '
+        +'style="margin-top:.15rem;font-size:.56rem;padding:.1rem .28rem;border:none;border-radius:.25rem;background:#0369a1;color:#fff;cursor:pointer;font-weight:700">套用建議參數</button>':'')
+      +'</div>';
+  },0);
+}
+
+/* ④ 五選中一推薦模式：主力號（準到期）+ 護盾號（超冷）*/
+var _oneHitBtCache={};
+function computeOneHitMode(key){
+  var nhd=(window._NUM_HIST_DATA&&window._NUM_HIST_DATA[key])||{};
+  var hpd=(window._HEAT_PROB_DATA&&window._HEAT_PROB_DATA[key])||{};
+  var rd=(window._RECENT_DATA&&window._RECENT_DATA[key])||[];
+  if(!rd.length)return null;
+  var latest=rd[0];
+  if(!latest||!latest.numbers||!latest.numbers.length)return null;
+  var latestNums=latest.numbers;
+  var lastSet={},neighborSet={};
+  latestNums.forEach(function(n){lastSet[n]=true;});
+  latestNums.forEach(function(n){
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<39&&!lastSet[n+1])neighborSet[n+1]=true;
+  });
+  var coldRec=computeColdFilterRec(key)||[];
+  var shieldNums=coldRec.slice(0,4).map(function(r){return r.num;});
+  var shieldSet={};shieldNums.forEach(function(n){shieldSet[n]=true;});
+  var candidates=[];
+  for(var n=1;n<=39;n++){
+    if(lastSet[n]||neighborSet[n]||shieldSet[n])continue;
+    var nd=nhd[String(n)]||nhd[n]||{};
+    var hp=hpd[String(n)]||{};
+    var miss=nd.current_miss||0,avgGap=nd.avg_gap||8;
+    var ratio=miss/Math.max(1,avgGap);
+    var heat=hp.next_hit_rate!==undefined?hp.next_hit_rate:(nd.recent_freq||0);
+    var freq=nd.recent_freq||0,dp=nd.danger_pct||0;
+    if(ratio<0.7||ratio>1.4)continue;
+    if(heat<7||heat>26)continue;
+    if(freq>3)continue;
+    var dueScore=1-Math.abs(ratio-1.0);
+    candidates.push({n:n,score:dueScore*0.55+heat/26*0.45,ratio:ratio,heat:heat,miss:miss,avgGap:avgGap,dp:dp});
+  }
+  if(!candidates.length)return null;
+  candidates.sort(function(a,b){return b.score-a.score;});
+  var anchor=candidates[0];
+  return{anchor:anchor.n,anchorInfo:anchor,shields:shieldNums,all:[anchor.n].concat(shieldNums)};
+}
+function _computeOneHitSimRec(key,dh,histStart){
+  if(histStart>=dh.length)return null;
+  var poolSize=39;
+  var latestNums=dh[histStart].numbers;
+  var lastSet={},neighborSet={};
+  for(var k=0;k<latestNums.length;k++){
+    lastSet[latestNums[k]]=true;
+    var n=latestNums[k];
+    if(n>1&&!lastSet[n-1])neighborSet[n-1]=true;
+    if(n<poolSize&&!lastSet[n+1])neighborSet[n+1]=true;
+  }
+  var histEnd=Math.min(histStart+101,dh.length);
+  var histDraws=[];for(var j=histStart+1;j<histEnd;j++)histDraws.push(dh[j].numbers);
+  var simNHD={},simHPD={};
+  for(var n=1;n<=poolSize;n++){
+    var miss=0;
+    if(latestNums.indexOf(n)!==-1){miss=0;}
+    else{for(var j=histStart+1;j<dh.length;j++){if(dh[j].numbers.indexOf(n)!==-1)break;miss++;if(miss>50)break;}}
+    var freq=0;for(var j=histStart;j<Math.min(histStart+20,dh.length);j++){if(dh[j].numbers.indexOf(n)!==-1)freq++;}
+    var gaps=[],lastA=-1;
+    for(var j=0;j<histDraws.length;j++){
+      if(histDraws[j].indexOf(n)!==-1){if(lastA!==-1)gaps.push(j-lastA);lastA=j;}
+    }
+    var avgGap=gaps.length?Math.round(gaps.reduce(function(a,b){return a+b;},0)/gaps.length):8;
+    simNHD[n]={current_miss:miss,recent_freq:freq,avg_gap:avgGap,danger_pct:Math.min(100,Math.round(miss/Math.max(1,avgGap)*100))};
+    var hits50=0,tot50=Math.min(50,histDraws.length);
+    for(var j=0;j<tot50;j++){if(histDraws[j].indexOf(n)!==-1)hits50++;}
+    simHPD[n]={next_hit_rate:tot50?Math.round(hits50/tot50*1000)/10:0};
+  }
+  // Get cold shields (top 4 from existing sim)
+  var coldSim=_computeColdRecSimWithParams(dh,histStart,{maxMiss:20,hotFreqCutoff:4,excludeNeighbor:true});
+  var shieldNums=coldSim?coldSim.slice(0,4).map(function(r){return r.num;}):[];
+  var shieldSet={};shieldNums.forEach(function(n){shieldSet[n]=true;});
+  // Find anchor
+  var cands=[];
+  for(var n=1;n<=poolSize;n++){
+    if(lastSet[n]||neighborSet[n]||shieldSet[n])continue;
+    var nd=simNHD[n],hp=simHPD[n];
+    var ratio=nd.current_miss/Math.max(1,nd.avg_gap);
+    var heat=hp.next_hit_rate;
+    if(ratio<0.7||ratio>1.4)continue;
+    if(heat<7||heat>26)continue;
+    if(nd.recent_freq>3)continue;
+    cands.push({num:n,score:(1-Math.abs(ratio-1))*0.55+heat/26*0.45});
+  }
+  if(!cands.length)return null;
+  cands.sort(function(a,b){return b.score-a.score;});
+  return[{num:cands[0].num,isAnchor:true}].concat(shieldNums.map(function(n){return{num:n};}));
+}
+function runOneHitBacktest(key,periods){
+  var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
+  if(dh.length<periods+5)return null;
+  var wins1=0,miss5=0,hits2p=0,total=0;
+  var maxTrials=Math.min(periods,dh.length-2);
+  for(var i=0;i<maxTrials;i++){
+    var simRec=_computeOneHitSimRec(key,dh,i+1);
+    if(!simRec||!simRec.length)continue;
+    total++;
+    var actual=dh[i].numbers,hitCount=0;
+    for(var ri=0;ri<simRec.length;ri++){if(actual.indexOf(simRec[ri].num)!==-1)hitCount++;}
+    if(hitCount===1)wins1++;
+    else if(hitCount===0)miss5++;
+    else hits2p++;
+  }
+  return{total:total,wins1:wins1,miss5:miss5,hits2p:hits2p};
+}
+function switchOneHitBt(key,periods){
+  var wrap=document.getElementById('pk-one-hit-bt-'+key);
+  if(wrap){
+    wrap.querySelectorAll('.one-hit-bt-tab').forEach(function(t){
+      t.classList.toggle('active',parseInt(t.dataset.p)===periods);
+    });
+  }
+  var el=document.getElementById('pk-one-hit-bt-res-'+key);
+  if(!el)return;
+  var cacheKey=key+'_'+periods;
+  var res=_oneHitBtCache[cacheKey];
+  if(!res){res=runOneHitBacktest(key,periods);if(res)_oneHitBtCache[cacheKey]=res;}
+  if(!res){el.innerHTML='<span style="color:#94a3b8;font-size:.56rem">資料不足</span>';return;}
+  var rate=res.total>0?Math.round(res.wins1/res.total*1000)/10:0;
+  var rateC=rate>=40?'#7e22ce':rate>=30?'#d97706':'#dc2626';
+  el.innerHTML='<div style="font-weight:800;color:'+rateC+'">五選中一勝率 <span style="font-size:.75rem">'+rate+'%</span>'
+    +' <span style="font-size:.56rem;font-weight:400;color:#64748b">（中1顆 '+res.wins1+' 期 / 五不中 '+res.miss5+' 期 / 中2+顆 '+res.hits2p+' 期，共 '+res.total+' 期）</span></div>'
+    +'<div style="font-size:.56rem;color:#475569;margin-top:.07rem">（理論基準：五選中一 ≈ 40.3%，五不中 ≈ 48.3%）</div>';
+}
+function renderOneHitPanel(key){
+  var el=document.getElementById('pk-one-hit-'+key);
+  if(!el)return;
+  var rec=computeOneHitMode(key);
+  if(!rec){el.innerHTML='';return;}
+  function ns(n){return(n<10?'0':'')+n;}
+  var ap=rec.anchorInfo;
+  var anchorBall='<span class="ball-sm '+_clsBall(rec.anchor)+'" style="width:1.75rem;height:1.75rem;font-size:.65rem;box-shadow:0 0 0 3px #7e22ce,0 0 8px #c4b5fd;cursor:default">'+ns(rec.anchor)+'</span>';
+  var shieldBalls=rec.shields.map(function(n){
+    return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.55rem;height:1.55rem;font-size:.58rem;opacity:.75;cursor:default">'+ns(n)+'</span>';
+  }).join('');
+  var activePeriods=parseInt((document.querySelector('#pk-one-hit-bt-'+key+' .one-hit-bt-tab.active')||{}).dataset&&(document.querySelector('#pk-one-hit-bt-'+key+' .one-hit-bt-tab.active')).dataset.p)||30;
+  el.innerHTML='<div class="one-hit-panel">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem">'
+    +'<span style="font-size:.62rem;font-weight:800;color:#6b21a8">🎯 五選中一推薦</span>'
+    +'<button onclick="applyRecToSel(\''+key+'\',['+rec.all.join(',')+'])" '
+    +'style="font-size:.57rem;padding:.1rem .28rem;border:none;border-radius:.25rem;background:#7e22ce;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap">帶入選號盤</button>'
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:.35rem;margin-bottom:.15rem;flex-wrap:wrap">'
+    +'<span style="font-size:.56rem;color:#6b21a8;font-weight:700">主力號：</span>'+anchorBall
+    +'<span style="font-size:.56rem;color:#0369a1;font-weight:700;margin-left:.25rem">護盾號：</span>'+shieldBalls
+    +'</div>'
+    +'<div style="font-size:.55rem;color:#6b21a8;line-height:1.55">'
+    +'主力 <strong>'+ns(rec.anchor)+'</strong>：遺漏 '+ap.miss+' 期（均 '+ap.avgGap+' 期，到位率 '+Math.round(ap.ratio*100)+'%）｜熱力 '+Math.round(ap.heat*10)/10+'%｜危 '+ap.dp+'%'
+    +'</div>'
+    +'<div id="pk-one-hit-bt-'+key+'" class="one-hit-bt-tabs" style="margin-top:.22rem">'
+    +'<span style="font-size:.55rem;color:#6b21a8;font-weight:700;margin-right:.08rem">回測：</span>'
+    +'<button class="one-hit-bt-tab active" data-p="30" onclick="switchOneHitBt(\''+key+'\',30)">近30期</button>'
+    +'<button class="one-hit-bt-tab" data-p="50" onclick="switchOneHitBt(\''+key+'\',50)">近50期</button>'
+    +'<button class="one-hit-bt-tab" data-p="100" onclick="switchOneHitBt(\''+key+'\',100)">近100期</button>'
+    +'</div>'
+    +'<div id="pk-one-hit-bt-res-'+key+'"></div>'
+    +'</div>';
+  switchOneHitBt(key,30);
+}
+
 function renderColdFilterPanel(key){
   var el=document.getElementById('pk-cold-rec-'+key);
   if(!el)return;
@@ -5297,7 +5678,16 @@ function renderColdFilterPanel(key){
     :'<div style="color:#64748b">目前條件沒有產生可帶入的 5 支號碼。</div>';
   var nums=rec.map(function(r){return r.num;});
   var activePeriods=_coldBtPeriod[key]||30;
+  // ── ① 連敗警報（僅用歷史資料，走前模擬）
+  var streak=computeStreakAlert(key);
+  var streakHtml='';
+  if(streak>=3){
+    streakHtml='<div class="streak-alert-box streak-alert-danger">🚨 連敗警報：最近 '+streak+' 期連續命中，目前策略對此彩種失準，建議調整參數或暫停操作</div>';
+  }else if(streak===2){
+    streakHtml='<div class="streak-alert-box streak-alert-warn">⚠️ 注意：最近連續 2 期命中，請留意策略是否需要調整</div>';
+  }
   el.innerHTML='<div class="cold-rec-panel">'
+    +streakHtml
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.15rem">'
     +'<span style="font-size:.62rem;font-weight:800;color:#0c4a6e">🧊 冷門過濾智能推薦｜'+rule.label+'</span>'
     +(nums.length?'<button onclick="applyRecToSel(\''+key+'\',['+nums.join(',')+'])" '
@@ -5308,6 +5698,8 @@ function renderColdFilterPanel(key){
     +'<div style="font-size:.55rem;color:#075985;line-height:1.45;margin:-.02rem 0 .18rem">'
     +'策略門檻：'+_coldRuleSummary(rule)+'</div>'
     +'<div class="cold-rec-balls">'+balls+'</div>'
+    // ── ② 雙策略共識面板（佔位符，renderConsensusPanel 填入）
+    +'<div id="pk-consensus-'+key+'"></div>'
     +_coldRuleEditor(key,rule)
     +'<details style="margin-top:.06rem">'
     +'<summary style="font-size:.57rem;color:#0369a1;cursor:pointer;list-style:none;'
@@ -5326,8 +5718,21 @@ function renderColdFilterPanel(key){
     +'</div>'
     +'<div id="pk-cold-bt-result-'+key+'"></div>'
     +'</div>'
+    // ── ③ 自適應參數掃描區塊
+    +'<div class="param-scan-box">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center">'
+    +'<span style="font-size:.57rem;font-weight:800;color:#0c4a6e">⚙️ 自適應參數建議</span>'
+    +'<button onclick="renderAutoParamSuggestion(\''+key+'\')" '
+    +'style="font-size:.55rem;padding:.1rem .26rem;border:none;border-radius:.25rem;background:#0369a1;color:#fff;cursor:pointer;font-weight:700">掃描最優參數</button>'
+    +'</div>'
+    +'<div id="pk-param-scan-'+key+'" style="margin-top:.1rem"></div>'
+    +'</div>'
+    // ── ④ 五選中一推薦面板（佔位符，renderOneHitPanel 填入）
+    +'<div id="pk-one-hit-'+key+'"></div>'
     +'</div>';
   renderColdFilterBacktest(key,activePeriods);
+  renderConsensusPanel(key);
+  renderOneHitPanel(key);
 }
 
 function applyRecToSel(key,nums){
