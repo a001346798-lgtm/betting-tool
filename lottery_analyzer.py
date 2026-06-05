@@ -2004,26 +2004,31 @@ tr.stripe td{background:#f8fafc}
 .consensus-cause-row:last-child{border-bottom:none}
 .consensus-case-line{font-size:.56rem;color:#475569;line-height:1.55;padding:.04rem 0;border-bottom:1px solid #f0fdf4}
 .consensus-sug{margin-top:.2rem;font-size:.58rem;color:#14532d;background:#f0fdf4;border:1px solid #86efac;border-radius:.35rem;padding:.2rem .28rem;line-height:1.65}
-.arb-panel{background:linear-gradient(135deg,#eef2ff,#f8fafc);border:1.5px solid #818cf8;border-radius:.7rem;padding:.5rem .6rem;margin-bottom:.45rem}
-.arb-head{display:flex;justify-content:space-between;align-items:center;gap:.45rem;margin-bottom:.2rem;flex-wrap:wrap}
-.arb-title{font-size:.66rem;font-weight:900;color:#312e81}
-.arb-badge{font-size:.58rem;font-weight:900;border-radius:.35rem;padding:.16rem .42rem;white-space:nowrap}
+.arb-panel{background:linear-gradient(135deg,#eef2ff,#f8fafc);border:1.5px solid #818cf8;border-radius:.7rem;padding:.74rem .82rem;margin-bottom:.45rem;font-size:.92rem}
+.arb-head{display:flex;justify-content:space-between;align-items:center;gap:.45rem;margin-bottom:.28rem;flex-wrap:wrap}
+.arb-title{font-size:1rem;font-weight:900;color:#312e81;line-height:1.35}
+.arb-badge{font-size:.84rem;font-weight:900;border-radius:.4rem;padding:.22rem .52rem;white-space:normal;line-height:1.35}
 .arb-badge-go{background:#dcfce7;color:#166534;border:1px solid #86efac}
 .arb-badge-stop{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
-.arb-controls{display:flex;gap:.35rem;align-items:end;flex-wrap:wrap;margin:.18rem 0 .3rem}
-.arb-field{display:flex;flex-direction:column;gap:.08rem;font-size:.54rem;color:#4338ca;font-weight:800}
-.arb-field input{height:1.55rem;width:4.2rem;border:1px solid #c7d2fe;border-radius:.32rem;background:#fff;color:#0f172a;font-size:.62rem;padding:0 .32rem}
-.arb-tabs{display:flex;gap:.18rem;align-items:center;margin:.18rem 0 .22rem;flex-wrap:wrap}
-.arb-tab{font-size:.55rem;padding:.1rem .28rem;border:1px solid #a5b4fc;border-radius:.28rem;background:#fff;color:#4338ca;cursor:pointer;font-weight:700;line-height:1.5}
+.arb-help{background:#fff;border:1px solid #c7d2fe;border-radius:.5rem;padding:.48rem .55rem;margin:.25rem 0 .42rem;color:#334155;font-size:.86rem;line-height:1.65}
+.arb-help strong{color:#312e81}
+.arb-controls{display:flex;gap:.42rem;align-items:end;flex-wrap:wrap;margin:.22rem 0 .35rem}
+.arb-field{display:flex;flex-direction:column;gap:.12rem;font-size:.82rem;color:#4338ca;font-weight:800;line-height:1.35}
+.arb-field input{height:2.15rem;width:5rem;border:1px solid #c7d2fe;border-radius:.38rem;background:#fff;color:#0f172a;font-size:.95rem;padding:0 .4rem}
+.arb-tabs{display:flex;gap:.22rem;align-items:center;margin:.2rem 0 .3rem;flex-wrap:wrap}
+.arb-tab{font-size:.82rem;padding:.16rem .42rem;border:1px solid #a5b4fc;border-radius:.34rem;background:#fff;color:#4338ca;cursor:pointer;font-weight:800;line-height:1.5}
 .arb-tab.active{background:#4338ca;color:#fff;border-color:#4338ca}
-.arb-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:.38rem;margin-top:.25rem}
-.arb-card{background:rgba(255,255,255,.75);border:1px solid #c7d2fe;border-radius:.45rem;padding:.32rem .38rem}
-.arb-card-title{font-size:.6rem;font-weight:900;color:#4338ca;margin-bottom:.14rem}
-.arb-row{display:flex;justify-content:space-between;gap:.3rem;font-size:.57rem;color:#334155;border-bottom:1px solid rgba(199,210,254,.55);padding:.07rem 0;line-height:1.45}
+.arb-grid{display:grid;grid-template-columns:1fr;gap:.42rem;margin-top:.28rem}
+.arb-card{background:rgba(255,255,255,.85);border:1px solid #c7d2fe;border-radius:.5rem;padding:.52rem .6rem}
+.arb-card-title{font-size:.94rem;font-weight:900;color:#4338ca;margin-bottom:.24rem;line-height:1.35}
+.arb-row{display:block;font-size:.86rem;color:#334155;border-bottom:1px solid rgba(199,210,254,.55);padding:.2rem 0;line-height:1.58}
+.arb-row span{display:block;color:#64748b;font-weight:800;margin-bottom:.03rem}
+.arb-row strong{display:block;color:#0f172a;font-weight:900}
 .arb-row:last-child{border-bottom:none}
-.arb-ticket{display:flex;gap:.22rem;flex-wrap:wrap;align-items:center;margin:.16rem 0}
-.arb-apply{font-size:.57rem;padding:.12rem .34rem;border:none;border-radius:.3rem;background:#4338ca;color:#fff;cursor:pointer;font-weight:800;white-space:nowrap}
-.arb-note{font-size:.55rem;color:#64748b;line-height:1.55;margin-top:.12rem}
+.arb-ticket{display:flex;gap:.26rem;flex-wrap:wrap;align-items:center;margin:.22rem 0}
+.arb-ticket-label{width:100%;font-size:.86rem;font-weight:900;color:#312e81;margin-bottom:.02rem}
+.arb-apply{font-size:.82rem;padding:.2rem .52rem;border:none;border-radius:.36rem;background:#4338ca;color:#fff;cursor:pointer;font-weight:900;white-space:nowrap;line-height:1.45}
+.arb-note{font-size:.82rem;color:#64748b;line-height:1.65;margin-top:.24rem}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
 /* Picker cell — 本期中獎號 gold ring (v9.0) */
@@ -6322,43 +6327,49 @@ function renderStrategyArbPanel(key){
   var decision=best||top;
   function ns(n){return(n<10?'0':'')+n;}
   function evText(ev){return (ev>=0?'+':'')+(Math.round(ev*1000)/10)+'%';}
+  function liftText(v){return (v>=0?'高 ':'低 ')+Math.abs(v)+'%';}
   var badge=best
-    ?'<span class="arb-badge arb-badge-go">建議：'+best.modeLabel+'｜'+best.label+'</span>'
-    :'<span class="arb-badge arb-badge-stop">建議：不下注或只觀察</span>';
+    ?'<span class="arb-badge arb-badge-go">可參考：'+best.modeLabel+'｜'+best.label+'</span>'
+    :'<span class="arb-badge arb-badge-stop">未達門檻：先觀察</span>';
   var ticketHtml='';
   if(decision&&decision.ticket.length>=5){
-    ticketHtml='<div class="arb-ticket">'+decision.ticket.map(function(n){
-      return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.55rem;height:1.55rem;font-size:.58rem">'+ns(n)+'</span>';
+    var ticketLabel=best?'目前可參考票':'觀察用最高分票（未達下注門檻）';
+    ticketHtml='<div class="arb-ticket"><div class="arb-ticket-label">'+ticketLabel+'</div>'+decision.ticket.map(function(n){
+      return '<span class="ball-sm '+_clsBall(n)+'" style="width:1.8rem;height:1.8rem;font-size:.7rem">'+ns(n)+'</span>';
     }).join('')+'<button class="arb-apply" onclick="applyArbTicketToSel(\''+key+'\',['+decision.ticket.join(',')+'],\''+decision.mode+'\',\''+decision.source+'\')">帶入選號盤</button></div>';
   }
   var detail=decision
-    ?'<div class="arb-row"><span>主指標</span><strong>'+periods+'期 '+decision.active.rate+'%｜EV '+evText(decision.active.ev)+'｜提升 '+decision.active.lift+'%</strong></div>'
-      +'<div class="arb-row"><span>風險</span><strong>樣本 '+decision.active.total+'｜最大失敗連續 '+decision.active.maxLoss+' 期｜正EV視窗 '+decision.positive+'/3</strong></div>'
-      +'<div class="arb-row"><span>30/50/100</span><strong>'+_arbRatesText(decision)+'</strong></div>'
+    ?'<div class="arb-row"><span>玩法判斷</span><strong>'+(best?'優先看 ':'先不要硬打；目前最高分是 ')+decision.modeLabel+' / '+decision.label+'</strong></div>'
+      +'<div class="arb-row"><span>為什麼</span><strong>'+periods+'期勝率 '+decision.active.rate+'%，比隨機基準 '+decision.active.base+'% '+liftText(decision.active.lift)+'</strong></div>'
+      +'<div class="arb-row"><span>下注門檻</span><strong>3個視窗中有 '+decision.positive+' 個估算報酬為正；至少要 2 個才算可參考</strong></div>'
+      +'<div class="arb-row"><span>風險提醒</span><strong>樣本 '+decision.active.total+' 期；歷史最大連續失敗 '+decision.active.maxLoss+' 期；報酬估算 '+evText(decision.active.ev)+'</strong></div>'
+      +'<div class="arb-row"><span>短中長期勝率</span><strong>'+_arbRatesText(decision)+'</strong></div>'
     :'<div class="arb-row"><span>狀態</span><strong>資料不足</strong></div>';
   var rows=candidates.slice(0,6).map(function(c){
     var color=c.stable?'#166534':(c.active.ev>0?'#d97706':'#64748b');
-    return '<div class="arb-row"><span>'+c.label+'｜'+c.modeLabel+'</span><strong style="color:'+color+'">'+c.active.rate+'% / EV '+evText(c.active.ev)+'</strong></div>';
+    var tag=c.stable?'符合門檻':(c.active.ev>0?'只有單段偏好':'觀察');
+    return '<div class="arb-row"><span>'+c.label+'｜'+c.modeLabel+'</span><strong style="color:'+color+'">勝率 '+c.active.rate+'%｜報酬估算 '+evText(c.active.ev)+'｜'+tag+'</strong></div>';
   }).join('');
   if(!rows)rows='<div class="arb-row"><span>候選策略</span><strong>資料不足</strong></div>';
   el.innerHTML='<div class="arb-panel">'
     +'<div class="arb-head"><span class="arb-title">🧭 策略仲裁器</span>'+badge+'</div>'
+    +'<div class="arb-help"><strong>這區的用意：</strong>不是替你盲目選號，而是把目前各種篩選法拿去做嚴格歷史回測，判斷今天比較適合看「五選不中」還是「五選中一」。若沒有同時通過短中長期門檻，就顯示先觀察。</div>'
     +'<div class="arb-controls">'
-    +'<label class="arb-field">五不中賠率<input id="arb-miss-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.missPayout+'"></label>'
-    +'<label class="arb-field">五選中一賠率<input id="arb-one-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.onePayout+'"></label>'
-    +'<label class="arb-field">最低樣本<input id="arb-min-samples-'+key+'" type="number" step="1" min="10" max="100" value="'+settings.minSamples+'"></label>'
-    +'<button class="arb-apply" onclick="applyArbSettings(\''+key+'\')">套用比較基準</button>'
+    +'<label class="arb-field">五不中賠率<br><small style="font-weight:600;color:#64748b">只影響報酬估算</small><input id="arb-miss-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.missPayout+'"></label>'
+    +'<label class="arb-field">五選中一賠率<br><small style="font-weight:600;color:#64748b">只影響報酬估算</small><input id="arb-one-pay-'+key+'" type="number" step="0.1" min="0.1" value="'+settings.onePayout+'"></label>'
+    +'<label class="arb-field">最低樣本期數<br><small style="font-weight:600;color:#64748b">太少不採信</small><input id="arb-min-samples-'+key+'" type="number" step="1" min="10" max="100" value="'+settings.minSamples+'"></label>'
+    +'<button class="arb-apply" onclick="applyArbSettings(\''+key+'\')">重新比較</button>'
     +'</div>'
     +'<div class="arb-tabs">'
-    +'<span style="font-size:.55rem;color:#4338ca;font-weight:800;margin-right:.1rem">比較視窗：</span>'
+    +'<span style="font-size:.7rem;color:#4338ca;font-weight:900;margin-right:.1rem">主要看：</span>'
     +'<button class="arb-tab'+(periods===30?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',30)">近30期</button>'
     +'<button class="arb-tab'+(periods===50?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',50)">近50期</button>'
     +'<button class="arb-tab'+(periods===100?' active':'')+'" onclick="switchArbPeriod(\''+key+'\',100)">近100期</button>'
     +'</div>'
     +ticketHtml
-    +'<div class="arb-grid"><div class="arb-card"><div class="arb-card-title">決策理由</div>'+detail+'</div>'
-    +'<div class="arb-card"><div class="arb-card-title">候選排序</div>'+rows+'</div></div>'
-    +'<div class="arb-note">判斷基準：五不中隨機約 48.3%，五選中一約 40.3%；此處用賠率換算 EV，且至少兩個回測視窗為正 EV 才列為可下注。若未達標，工具會建議不下注或只觀察。</div>'
+    +'<div class="arb-grid"><div class="arb-card"><div class="arb-card-title">白話決策</div>'+detail+'</div>'
+    +'<div class="arb-card"><div class="arb-card-title">其他候選策略</div>'+rows+'</div></div>'
+    +'<div class="arb-note">基準說明：隨機選 5 支時，五選不中約 48.3%，五選中一約 40.3%。「報酬估算」是依你填的賠率換算，正數才代表回測上可能有優勢；但仍只是歷史檢查，不保證下一期。</div>'
     +'</div>';
 }
 
