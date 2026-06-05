@@ -1878,17 +1878,17 @@ tr.stripe td{background:#f8fafc}
 .cold-bt-win-bar{font-weight:800;margin-bottom:.1rem}
 .cold-bt-hits{color:#475569;margin-top:.06rem}
 .cold-cause-box{margin-top:.24rem;border-top:1px dashed #93c5fd;padding-top:.22rem}
-.cold-cause-title{font-size:.56rem;font-weight:800;color:#0c4a6e;margin-bottom:.12rem}
-.cold-cause-grid{display:grid;grid-template-columns:1fr 1fr;gap:.22rem}
+.cold-cause-title{font-size:.66rem;font-weight:900;color:#0c4a6e;margin-bottom:.18rem}
+.cold-cause-grid{display:grid;grid-template-columns:1fr 1fr;gap:.32rem}
 .cold-cause-card{background:rgba(255,255,255,.68);border:1px solid #bae6fd;
-  border-radius:.38rem;padding:.2rem .28rem}
-.cold-cause-card-title{font-size:.54rem;font-weight:800;color:#0369a1;margin-bottom:.08rem}
-.cold-cause-row{display:flex;justify-content:space-between;gap:.22rem;font-size:.54rem;
-  color:#334155;border-bottom:1px solid rgba(186,230,253,.45);padding:.04rem 0}
+  border-radius:.42rem;padding:.28rem .34rem}
+.cold-cause-card-title{font-size:.62rem;font-weight:900;color:#0369a1;margin-bottom:.14rem}
+.cold-cause-row{display:flex;justify-content:space-between;gap:.3rem;font-size:.6rem;
+  color:#334155;border-bottom:1px solid rgba(186,230,253,.45);padding:.08rem 0;line-height:1.45}
 .cold-cause-row:last-child{border-bottom:none}
-.cold-cause-sug{margin-top:.16rem;font-size:.54rem;color:#7c2d12;background:#fff7ed;
-  border:1px solid #fed7aa;border-radius:.35rem;padding:.16rem .24rem;line-height:1.5}
-.cold-cause-case{font-size:.52rem;color:#475569;margin-top:.12rem;line-height:1.45}
+.cold-cause-sug{margin-top:.22rem;font-size:.6rem;color:#7c2d12;background:#fff7ed;
+  border:1px solid #fed7aa;border-radius:.38rem;padding:.22rem .3rem;line-height:1.65}
+.cold-cause-case{font-size:.58rem;color:#475569;margin-top:.16rem;line-height:1.6}
 @media(max-width:520px){.cold-cause-grid{grid-template-columns:1fr}}
 .pk-miss{font-size:.72rem;color:#334155;font-weight:600;margin-top:.12rem;line-height:1}
 
@@ -3787,7 +3787,7 @@ function runColdFilterBacktest(key,periods){
   var dh=(window._DRAW_HISTORY&&window._DRAW_HISTORY[key])||[];
   if(dh.length<periods+5)return null;
   var wins=0,hits1=0,hits2=0,hits3p=0,total=0,hitSum=0;
-  var causeAll={},causeHit1={},causeHit2={},causeHit3p={},numHits={},cases=[];
+  var causeAll={},causeHit1={},causeHit2={},causeHit3p={},pairHit2={},numHits={},cases=[];
   var maxTrials=Math.min(periods,dh.length-2);
   function addCause(bucket,label){bucket[label]=(bucket[label]||0)+1;}
   for(var i=0;i<maxTrials;i++){
@@ -3817,6 +3817,9 @@ function runColdFilterBacktest(key,periods){
           addCause(bucket,label);
         });
       });
+      if(hitCount===2){
+        addCause(pairHit2,_coldPairLabel(hitRecs[0],hitRecs[1]));
+      }
       if(cases.length<3){
         cases.push({
           date:dh[i].date||'',
@@ -3837,9 +3840,29 @@ function runColdFilterBacktest(key,periods){
     causeHit1:causeHit1,
     causeHit2:causeHit2,
     causeHit3p:causeHit3p,
+    pairHit2:pairHit2,
     numHits:numHits,
     cases:cases
   };
+}
+
+function _coldPrimaryCause(r){
+  var heat=Number(r.heat||0),freq=Number(r.recentFreq||0);
+  var miss=Number(r.miss||0),dp=Number(r.dp||0),rank=Number(r.rank||0);
+  if(rank>0&&rank<=2)return '冷門Top2';
+  if(freq>=3)return '近20期≥3次';
+  if(heat>=15)return '熱力≥15%';
+  if(miss<=5)return '遺漏≤5期';
+  if(dp>=60)return '危險度≥60%';
+  if(rank>=6)return '後段補位';
+  if(r.tiebreak)return '平手低危';
+  return '一般低熱';
+}
+
+function _coldPairLabel(a,b){
+  var x=_coldPrimaryCause(a),y=_coldPrimaryCause(b);
+  var arr=[x,y].sort();
+  return arr[0]+' + '+arr[1];
 }
 
 function _coldCauseLabels(r){
@@ -3908,15 +3931,17 @@ function _renderColdCauseAnalysis(res){
   }).join('<br>');
   return '<details class="cold-cause-box" open>'
     +'<summary class="cold-cause-title" style="cursor:pointer;list-style:none">▶ 命中原因分析</summary>'
-    +'<div style="font-size:.55rem;color:#475569;margin-bottom:.14rem">'
+    +'<div style="font-size:.6rem;color:#475569;margin-bottom:.18rem;line-height:1.6">'
     +'平均每期中 <strong>'+res.avgHits+'</strong> 顆；敗局平均中 <strong>'+res.avgLossHits+'</strong> 顆。'
-    +'以下為命中號碼當下條件統計，同一顆可能同時符合多個條件。</div>'
+    +'下方「逐顆條件」是命中號碼本身的標籤；「中2配對」才是同一期兩顆一起命中的結構。</div>'
     +'<div class="cold-cause-grid">'
-    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1顆常見條件</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中1逐顆條件</div>'
     +_coldTopRows(res.causeHit1,hit1Den,4)+'</div>'
-    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中2顆常見條件</div>'
+    +'<div class="cold-cause-card"><div class="cold-cause-card-title">中2命中號逐顆條件</div>'
     +_coldTopRows(res.causeHit2,hit2Den,4)+'</div>'
     +'</div>'
+    +'<div class="cold-cause-card" style="margin-top:.22rem"><div class="cold-cause-card-title">中2配對結構</div>'
+    +_coldTopRows(res.pairHit2,Math.max(1,res.hits2),5)+'</div>'
     +_coldTopNums(res.numHits)
     +(cases?'<div class="cold-cause-case">近期敗例：<br>'+cases+'</div>':'')
     +'<div class="cold-cause-sug">'+sug+'</div>'
