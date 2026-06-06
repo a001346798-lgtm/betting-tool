@@ -309,6 +309,9 @@ create policy "anon_all" on app_settings
         </label>
         <span id="storage-info" class="text-xs text-slate-500 ml-auto"></span>
       </div>
+      <!-- 篩選結果摘要（filterRecords / renderRecordsTable 後動態填入） -->
+      <div id="filter-summary" class="hidden mb-3"></div>
+
       <div class="overflow-x-auto rounded-lg" style="max-height:420px; overflow-y:auto;">
         <table>
           <thead>
@@ -1933,6 +1936,104 @@ function renderRecordsTable(records) {
       ${pnlCell}${afterBalCell}${actionCell}
     </tr>`;
   }).join('');
+
+  renderFilterSummary(records);
+}
+
+// ============================================================
+// 篩選結果摘要
+// ============================================================
+function renderFilterSummary(records) {
+  const el = document.getElementById('filter-summary');
+  if (!el) return;
+
+  // 全部隱藏時不顯示摘要
+  if (!records || records.length === 0) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+
+  // 計算整體統計
+  function calcStats(recs) {
+    let wins = 0, losses = 0, pending = 0, totalBet = 0, totalPnl = 0;
+    recs.forEach(r => {
+      totalBet += parseFloat(r.bet) || 0;
+      if (r.status === 'pending')   { pending++; }
+      else if (isWonRecord(r))      { wins++;    totalPnl += parseFloat(r.pnl) || 0; }
+      else if (isLostRecord(r))     { losses++;  totalPnl += parseFloat(r.pnl) || 0; }
+    });
+    const settled  = wins + losses;
+    const winRate  = settled > 0 ? (wins / settled * 100).toFixed(1) : '—';
+    return { wins, losses, pending, settled, totalBet: round2(totalBet), totalPnl: round2(totalPnl), winRate };
+  }
+
+  const overall = calcStats(records);
+
+  // 依備註分群
+  const noteMap = {};
+  records.forEach(r => {
+    const key = (r.note || '').trim() || '（無備註）';
+    if (!noteMap[key]) noteMap[key] = [];
+    noteMap[key].push(r);
+  });
+  const noteEntries = Object.entries(noteMap).sort(([a], [b]) => a.localeCompare(b, 'zh-TW'));
+
+  // 整體摘要列
+  const pnlColor  = overall.totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+  const pnlPrefix = overall.totalPnl >= 0 ? '+' : '';
+
+  // 備註分群列
+  const noteRows = noteEntries.map(([note, recs]) => {
+    const s = calcStats(recs);
+    const pc = s.totalPnl >= 0 ? 'positive' : 'negative';
+    const pp = s.totalPnl >= 0 ? '+' : '';
+    return `
+    <tr class="border-t border-slate-700/50">
+      <td class="py-1.5 pr-3 text-slate-300 max-w-[120px] truncate" title="${escHtml(note)}">${escHtml(note)}</td>
+      <td class="py-1.5 pr-3 text-center text-slate-400">${recs.length}</td>
+      <td class="py-1.5 pr-3 text-center"><span class="text-emerald-400">${s.wins}</span>/<span class="text-rose-400">${s.losses}</span>${s.pending ? `/<span class="text-amber-400">${s.pending}⏳</span>` : ''}</td>
+      <td class="py-1.5 pr-3 text-right text-slate-300">${formatNum(s.totalBet)}</td>
+      <td class="py-1.5 text-right font-semibold ${pc}">${pp}${formatNum(s.totalPnl)}</td>
+    </tr>`;
+  }).join('');
+
+  el.classList.remove('hidden');
+  el.innerHTML = `
+  <div class="bg-slate-900 rounded-xl p-3 border border-slate-700">
+    <!-- 整體摘要 -->
+    <div class="flex flex-wrap gap-x-5 gap-y-1 mb-3 pb-2 border-b border-slate-700">
+      <div class="text-xs text-slate-500">篩選結果
+        <span class="text-slate-200 font-bold ml-1">${records.length} 筆</span>
+      </div>
+      <div class="text-xs text-slate-500">總下注
+        <span class="text-sky-300 font-bold ml-1">${formatNum(overall.totalBet)}</span>
+      </div>
+      <div class="text-xs text-slate-500">損益合計
+        <span class="font-bold ml-1 ${pnlColor}">${pnlPrefix}${formatNum(overall.totalPnl)}</span>
+      </div>
+      <div class="text-xs text-slate-500">勝/敗
+        <span class="text-emerald-400 font-bold ml-1">${overall.wins}</span>
+        <span class="text-slate-600">/</span>
+        <span class="text-rose-400 font-bold">${overall.losses}</span>
+        ${overall.pending ? `<span class="text-amber-400 font-bold"> +${overall.pending}⏳</span>` : ''}
+      </div>
+      <div class="text-xs text-slate-500">勝率
+        <span class="text-sky-300 font-bold ml-1">${overall.winRate}${overall.winRate !== '—' ? '%' : ''}</span>
+      </div>
+    </div>
+    <!-- 備註分群小計 -->
+    <div class="overflow-x-auto">
+      <table style="font-size:0.78rem; width:100%; border-collapse:collapse;">
+        <thead>
+          <tr class="text-slate-500">
+            <th class="text-left pb-1 pr-3 font-semibold">備註</th>
+            <th class="text-center pb-1 pr-3 font-semibold">場次</th>
+            <th class="text-center pb-1 pr-3 font-semibold">勝/敗</th>
+            <th class="text-right pb-1 pr-3 font-semibold">下注額</th>
+            <th class="text-right pb-1 font-semibold">損益</th>
+          </tr>
+        </thead>
+        <tbody>${noteRows}</tbody>
+      </table>
+    </div>
+  </div>`;
 }
 
 // ============================================================
@@ -2160,6 +2261,8 @@ function resetFilter() {
   document.getElementById('filter-start').value = '';
   document.getElementById('filter-end').value   = '';
   document.getElementById('filter-project').value = '';
+  const s = document.getElementById('filter-summary');
+  if (s) { s.classList.add('hidden'); s.innerHTML = ''; }
   renderRecordsTable(cache.records);
 }
 
