@@ -298,6 +298,7 @@ create policy "anon_all" on app_settings
           </select>
         </div>
         <button onclick="filterRecords()" class="text-xs bg-sky-700 hover:bg-sky-600 text-white px-3 py-1 rounded-lg">篩選</button>
+        <button onclick="filterThisWeek()" class="text-xs bg-indigo-700 hover:bg-indigo-600 text-white px-3 py-1 rounded-lg">📅 本週</button>
         <button onclick="resetFilter()" class="text-xs bg-slate-600 hover:bg-slate-500 text-white px-3 py-1 rounded-lg">重設</button>
       </div>
       <div class="flex flex-wrap gap-2 mb-2 items-center">
@@ -2160,6 +2161,21 @@ function resetFilter() {
   document.getElementById('filter-end').value   = '';
   document.getElementById('filter-project').value = '';
   renderRecordsTable(cache.records);
+}
+
+// 本週快捷篩選（週日 → 週六，自動填入日期區間並套用）
+function filterThisWeek() {
+  const today     = new Date();
+  const dayOfWeek = today.getDay();            // 0=週日, 6=週六
+  const sunday    = new Date(today);
+  sunday.setDate(today.getDate() - dayOfWeek); // 本週週日
+  const saturday  = new Date(sunday);
+  saturday.setDate(sunday.getDate() + 6);      // 本週週六
+
+  const fmt = d => d.toISOString().slice(0, 10);
+  document.getElementById('filter-start').value = fmt(sunday);
+  document.getElementById('filter-end').value   = fmt(saturday);
+  filterRecords();
 }
 
 // ============================================================
