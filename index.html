@@ -181,11 +181,13 @@ create table betting_records (
   after_bal numeric,
   status text not null default 'pending',
   note text default '',
-  odds numeric not null default 1.0
+  odds numeric not null default 1.0,
+  settle_mode text not null default 'odds'
 );
 
 -- ※ 若資料表已存在，請執行以下語句補加 odds 欄位：
 -- alter table betting_records add column if not exists odds numeric not null default 1.0;
+-- alter table betting_records add column if not exists settle_mode text not null default 'odds';
 
 -- ③ 應用程式設定表（儲存備註標籤等）
 create table app_settings (
@@ -471,6 +473,7 @@ const DEFAULT_NOTE_ODDS_MAP = {
 const NOTE_ODDS_MAP = { ...DEFAULT_NOTE_ODDS_MAP };
 const DEFAULT_ODDS = 1.0;
 let dbSupportsOddsColumn = true;
+let dbSupportsSettleModeColumn = true;
 
 function parseOddsValue(value) {
   const num = parseFloat(value);
@@ -483,9 +486,21 @@ function getSupabaseErrorText(error) {
     .join(' ');
 }
 
-function isMissingOddsColumnError(error) {
+function isMissingColumnError(error, columnName) {
   const text = getSupabaseErrorText(error);
-  return /odds/i.test(text) && /(column|schema cache|not find|does not exist|PGRST204)/i.test(text);
+  return text.includes(columnName) && /(column|schema cache|not find|does not exist|PGRST204)/i.test(text);
+}
+
+function isMissingOddsColumnError(error) {
+  return isMissingColumnError(error, 'odds');
+}
+
+function isMissingSettleModeColumnError(error) {
+  return isMissingColumnError(error, 'settle_mode');
+}
+
+function normalizeSettleMode(mode) {
+  return mode === 'manual' ? 'manual' : 'odds';
 }
 
 function normalizeNoteOddsMap(map = {}) {
@@ -799,7 +814,8 @@ function dbToRecord(r) {
   return normalizeRecordBalanceFields({ id: r.id, projectId: r.project_id, date: r.date, project: r.project,
     initBal: r.init_bal, pct: r.pct, bet: r.bet, pnl: r.pnl, afterBal: r.after_bal,
     status: r.status, note: r.note || '',
-    odds: parseOddsValue(r.odds ?? getOddsForNote(r.note)) });  // 舊紀錄 odds 為 null 時依備註 fallback
+    odds: parseOddsValue(r.odds ?? getOddsForNote(r.note)),
+    settleMode: normalizeSettleMode(r.settle_mode) });  // 舊紀錄欄位缺漏時 fallback
 }
 
 // camelCase JS → snake_case DB row
@@ -815,6 +831,9 @@ function recordToDb(r, options = {}) {
     after_bal: r.afterBal ?? null, status: r.status, note: r.note || '' };
   if (options.includeOdds !== false && dbSupportsOddsColumn) {
     row.odds = parseOddsValue(r.odds ?? getOddsForNote(r.note));
+  }
+  if (options.includeSettleMode !== false && dbSupportsSettleModeColumn) {
+    row.settle_mode = normalizeSettleMode(r.settleMode);
   }
   return row;
 }
@@ -852,10 +871,11 @@ async function db_insertRecord(rec) {
   cache.records.unshift(rec);
   if (isCloud()) {
     let { error } = await sb.from('betting_records').insert(recordToDb(rec));
-    if (error && isMissingOddsColumnError(error)) {
-      dbSupportsOddsColumn = false;
-      ({ error } = await sb.from('betting_records').insert(recordToDb(rec, { includeOdds: false })));
-      if (!error) showToast('已用相容模式儲存；Supabase 尚未新增賠率欄位', 'info');
+    if (error && (isMissingOddsColumnError(error) || isMissingSettleModeColumnError(error))) {
+      if (isMissingOddsColumnError(error)) dbSupportsOddsColumn = false;
+      if (isMissingSettleModeColumnError(error)) dbSupportsSettleModeColumn = false;
+      ({ error } = await sb.from('betting_records').insert(recordToDb(rec)));
+      if (!error) showToast('已用相容模式儲存；Supabase 尚未新增部分欄位', 'info');
     }
     if (error) {
       cache.records = cache.records.filter(r => r.id !== rec.id);
@@ -872,10 +892,11 @@ async function db_updateRecord(rec) {
   if (idx >= 0) cache.records[idx] = rec;
   if (isCloud()) {
     let { error } = await sb.from('betting_records').update(recordUpdateToDb(rec)).eq('id', rec.id);
-    if (error && isMissingOddsColumnError(error)) {
-      dbSupportsOddsColumn = false;
-      ({ error } = await sb.from('betting_records').update(recordUpdateToDb(rec, { includeOdds: false })).eq('id', rec.id));
-      if (!error) showToast('已用相容模式更新；Supabase 尚未新增賠率欄位', 'info');
+    if (error && (isMissingOddsColumnError(error) || isMissingSettleModeColumnError(error))) {
+      if (isMissingOddsColumnError(error)) dbSupportsOddsColumn = false;
+      if (isMissingSettleModeColumnError(error)) dbSupportsSettleModeColumn = false;
+      ({ error } = await sb.from('betting_records').update(recordUpdateToDb(rec)).eq('id', rec.id));
+      if (!error) showToast('已用相容模式更新；Supabase 尚未新增部分欄位', 'info');
     }
     if (error) throw new Error('紀錄寫入失敗：' + error.message);
   } else {
@@ -1381,12 +1402,18 @@ function buildProjectPage(proj) {
     <input type="text" id="pi-${id}-note" placeholder="備註（選填）"
       class="w-full mb-2 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
       oninput="autoFillOdds('${id}')" />
-    <!-- 賠率欄位：依備註自動帶入，可手動覆蓋 -->
-    <div class="flex items-center gap-2 mb-3">
-      <label class="text-xs text-slate-500 whitespace-nowrap">📈 投注賠率</label>
-      <input type="number" id="pi-${id}-odds" value="1.0" min="1.0" max="3.0" step="0.1" inputmode="decimal"
-        class="w-24 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500" />
-      <span class="text-xs text-slate-600">× 下注額 = 贏時預設獲利</span>
+    <!-- 結算方式：賠率自動換算，或球類等情境手動輸入實際損益 -->
+    <div class="flex flex-wrap items-center gap-3 mb-3">
+      <div id="pi-${id}-odds-wrap" class="flex items-center gap-2">
+        <label class="text-xs text-slate-500 whitespace-nowrap">📈 投注賠率</label>
+        <input type="number" id="pi-${id}-odds" value="1.0" min="1.0" max="3.0" step="0.1" inputmode="decimal"
+          class="w-24 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500" />
+        <span class="text-xs text-slate-600">× 下注額 = 贏時預設獲利</span>
+      </div>
+      <label class="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg border border-slate-600 cursor-pointer">
+        <input type="checkbox" id="pi-${id}-manual-settle" class="accent-sky-500" onchange="toggleSettlementMode('${id}')" />
+        <span>手動輸入實際損益</span>
+      </label>
     </div>
     <button onclick="confirmBet('${id}')" class="w-full ${c.btn} text-white py-3 rounded-xl font-bold text-sm shadow-lg">
       📌 確認下注（記為待結算）
@@ -1506,6 +1533,21 @@ function loadProjectDataToUI(id) {
   // 賠率欄位：初次載入預設 1.0
   const oddsEl = g(`pi-${id}-odds`);
   if (oddsEl && !oddsEl.value) oddsEl.value = DEFAULT_ODDS;
+  const manualSettleEl = g(`pi-${id}-manual-settle`);
+  if (manualSettleEl) manualSettleEl.checked = false;
+  toggleSettlementMode(id);
+}
+
+function toggleSettlementMode(id) {
+  const manualEl = document.getElementById(`pi-${id}-manual-settle`);
+  const oddsEl = document.getElementById(`pi-${id}-odds`);
+  const wrap = document.getElementById(`pi-${id}-odds-wrap`);
+  const isManual = !!manualEl?.checked;
+  if (oddsEl) oddsEl.disabled = isManual;
+  if (wrap) {
+    wrap.classList.toggle('opacity-50', isManual);
+    wrap.classList.toggle('pointer-events-none', isManual);
+  }
 }
 
 function updateSuggestBet(id) {
@@ -1729,9 +1771,11 @@ async function confirmBet(id) {
   const noteEl   = document.getElementById(`pi-${id}-note`);
   const dateEl   = document.getElementById(`pi-${id}-bet-date`);
   const oddsEl   = document.getElementById(`pi-${id}-odds`);
+  const manualSettleEl = document.getElementById(`pi-${id}-manual-settle`);
   const note     = noteEl ? noteEl.value.trim() : '';
   const betDate  = dateEl?.value || getTodayStr();
   const betOdds  = parseOddsValue(oddsEl?.value || getOddsForNote(note));
+  const settleMode = manualSettleEl?.checked ? 'manual' : 'odds';
   const mb       = parseFloat(p.manualBet) || 0;
   const sb2  = round2(bal * (parseFloat(p.sliderPct) || 5) / 100);
   const actualBet = mb > 0 ? mb : sb2;
@@ -1751,7 +1795,7 @@ async function confirmBet(id) {
   // ✅ 只建立待結算紀錄，不動 p.currentBalance
   const record = {
     id: Date.now(), projectId: id, date: betDate, project: p.label,
-    initBal: bal, pct: usedPct, bet: actualBet, odds: betOdds,
+    initBal: bal, pct: usedPct, bet: actualBet, odds: betOdds, settleMode,
     pnl: null, afterBal: null, status: 'pending', note
   };
 
@@ -1774,6 +1818,8 @@ async function confirmBet(id) {
   if (noteEl) noteEl.value = '';
   if (dateEl) dateEl.value = getTodayStr(); // 送出後重設回今日
   if (oddsEl) oddsEl.value = DEFAULT_ODDS;
+  if (manualSettleEl) manualSettleEl.checked = false;
+  toggleSettlementMode(id);
   const mb2 = document.getElementById(`pi-${id}-manual-bet`); if (mb2) mb2.value = '';
   const mp2 = document.getElementById(`pi-${id}-manual-pct`); if (mp2) mp2.value = '';
   updateSuggestBet(id); renderProjectMgmtList();
@@ -1796,13 +1842,16 @@ async function settleRecord(recordId, type) {
   const prevBalance = p ? parseFloat(p.currentBalance) : null;
   const baseBalance = Number.isFinite(prevBalance) ? round2(prevBalance) : (parseFloat(rec.initBal) || 0);
   const prevRecord = { initBal: rec.initBal, pnl: rec.pnl, afterBal: rec.afterBal, status: rec.status };
+  const isManualSettle = normalizeSettleMode(rec.settleMode) === 'manual';
 
   if (type === 'win') {
     const recOdds      = parseOddsValue(rec.odds ?? getOddsForNote(rec.note));
     const defaultProfit = round2(rec.bet * recOdds);
     const input = prompt(
-      `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}　賠率：${recOdds}x\n\n請輸入本次【獲利金額】\n（Enter = 下注額 × 賠率 = ${formatNum(defaultProfit)}）：`,
-      defaultProfit);
+      isManualSettle
+        ? `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【實際獲利金額】：`
+        : `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}　賠率：${recOdds}x\n\n請輸入本次【獲利金額】\n（Enter = 下注額 × 賠率 = ${formatNum(defaultProfit)}）：`,
+      isManualSettle ? '' : defaultProfit);
     if (input === null) return;
     const profit = parseFloat(input);
     if (isNaN(profit) || profit < 0) { showToast('請輸入有效金額', 'error'); return; }
@@ -1824,13 +1873,20 @@ async function settleRecord(recordId, type) {
     await db_updateRecord(rec);
 
   } else {
-    if (!confirm(`確定【🔴 輸（損）】？\n${rec.project}　損失：${formatNum(rec.bet)}`)) return;
+    const input = prompt(
+      isManualSettle
+        ? `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【實際虧損金額】：`
+        : `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【虧損金額】\n（Enter = 下注額 = ${formatNum(rec.bet)}）：`,
+      isManualSettle ? '' : rec.bet);
+    if (input === null) return;
+    const loss = parseFloat(input);
+    if (isNaN(loss) || loss < 0) { showToast('請輸入有效金額', 'error'); return; }
 
     saveUndo({ type: 'settleRecord', projId: rec.projectId, prevBalance, recordId, prevRecord });
 
-    // 餘額 = 原餘額 - 下注額
+    // 餘額 = 原餘額 - 實際虧損
     rec.initBal = baseBalance;
-    rec.pnl    = round2(-rec.bet);
+    rec.pnl    = round2(-loss);
     rec.status = 'lost';
     rec.afterBal = round2(baseBalance + rec.pnl);
     if (p) {
@@ -1848,7 +1904,7 @@ async function settleRecord(recordId, type) {
   renderOverviewCards();
   showToast(type === 'win'
     ? `✅ 贏！+${formatNum(rec.pnl)}　新餘額 ${p ? formatNum(p.currentBalance) : ''}`
-    : `❌ 輸 -${formatNum(rec.bet)}　新餘額 ${p ? formatNum(p.currentBalance) : ''}`,
+    : `❌ 輸 -${formatNum(Math.abs(rec.pnl || 0))}　新餘額 ${p ? formatNum(p.currentBalance) : ''}`,
     type === 'win' ? 'ok' : 'error');
 }
 
@@ -1917,9 +1973,12 @@ function renderRecordsTable(records) {
 
     const statusIcon = isWon ? '🟢' : isLost ? '🔴' : '';
     const noteText = String(r.note || '').trim();
+    const modeBadge = normalizeSettleMode(r.settleMode) === 'manual'
+      ? `<span class="inline-block text-[11px] px-1.5 py-0.5 rounded bg-sky-900/60 text-sky-200 border border-sky-700/60 ml-1 align-middle">手動</span>`
+      : '';
     const noteCell = noteText
-      ? `<td title="${escHtml(noteText)}"><span class="inline-block max-w-[120px] truncate align-middle text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-200 border border-slate-600">${escHtml(noteText)}</span></td>`
-      : `<td class="text-slate-500 text-xs">—</td>`;
+      ? `<td title="${escHtml(noteText)}"><span class="inline-block max-w-[120px] truncate align-middle text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-200 border border-slate-600">${escHtml(noteText)}</span>${modeBadge}</td>`
+      : `<td class="text-slate-500 text-xs">—${modeBadge}</td>`;
 
     const editBtn = `<button onclick="openEditModal(${r.id})" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-2 py-1 rounded">✏️</button>`;
     const actionCell = isPending
