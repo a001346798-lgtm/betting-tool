@@ -1402,7 +1402,7 @@ function buildProjectPage(proj) {
     <input type="text" id="pi-${id}-note" placeholder="備註（選填）"
       class="w-full mb-2 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
       oninput="autoFillOdds('${id}')" />
-    <!-- 結算方式：賠率自動換算，或球類等情境手動輸入實際損益 -->
+    <!-- 結算方式：賠率自動換算，或球類等情境在贏時手動輸入實際獲利 -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
       <div id="pi-${id}-odds-wrap" class="flex items-center gap-2">
         <label class="text-xs text-slate-500 whitespace-nowrap">📈 投注賠率</label>
@@ -1412,7 +1412,7 @@ function buildProjectPage(proj) {
       </div>
       <label class="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg border border-slate-600 cursor-pointer">
         <input type="checkbox" id="pi-${id}-manual-settle" class="accent-sky-500" onchange="toggleSettlementMode('${id}')" />
-        <span>手動輸入實際損益</span>
+        <span>贏時手動輸入獲利</span>
       </label>
     </div>
     <button onclick="confirmBet('${id}')" class="w-full ${c.btn} text-white py-3 rounded-xl font-bold text-sm shadow-lg">
@@ -1874,10 +1874,8 @@ async function settleRecord(recordId, type) {
 
   } else {
     const input = prompt(
-      isManualSettle
-        ? `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【實際虧損金額】：`
-        : `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【虧損金額】\n（Enter = 下注額 = ${formatNum(rec.bet)}）：`,
-      isManualSettle ? '' : rec.bet);
+      `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【虧損金額】\n（Enter = 下注額 = ${formatNum(rec.bet)}）：`,
+      rec.bet);
     if (input === null) return;
     const loss = parseFloat(input);
     if (isNaN(loss) || loss < 0) { showToast('請輸入有效金額', 'error'); return; }
