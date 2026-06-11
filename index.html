@@ -285,16 +285,22 @@ create policy "anon_all" on app_settings
       <div class="flex flex-wrap gap-2 mb-3">
         <div class="flex items-center gap-1">
           <label class="text-xs text-slate-500">從</label>
-          <input type="date" id="filter-start" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500" />
+          <input type="date" id="filter-start" onchange="filterRecords()" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500" />
         </div>
         <div class="flex items-center gap-1">
           <label class="text-xs text-slate-500">到</label>
-          <input type="date" id="filter-end" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500" />
+          <input type="date" id="filter-end" onchange="filterRecords()" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500" />
         </div>
         <div class="flex items-center gap-1">
           <label class="text-xs text-slate-500">項目</label>
-          <select id="filter-project" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500 cursor-pointer">
+          <select id="filter-project" onchange="filterRecords()" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500 cursor-pointer">
             <option value="">全部項目</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-1">
+          <label class="text-xs text-slate-500">備註</label>
+          <select id="filter-note" onchange="filterRecords()" class="bg-slate-700 text-slate-200 text-xs px-2 py-1 rounded border border-slate-600 outline-none focus:border-sky-500 cursor-pointer">
+            <option value="">全部備註</option>
           </select>
         </div>
         <button onclick="filterRecords()" class="text-xs bg-sky-700 hover:bg-sky-600 text-white px-3 py-1 rounded-lg">篩選</button>
@@ -744,6 +750,7 @@ async function syncFromCloud() {
     renderProjectMgmtList();
     renderTagsManageList();
     refreshAllProjectTags();
+    renderProjectFilter();
     renderRecordsTable(getFilteredRecords());
     renderStatsPanel();
     // 更新所有項目頁面的餘額顯示
@@ -1888,6 +1895,7 @@ function sortRecordsForLedger(records) {
 function renderRecordsTable(records) {
   const tbody = document.getElementById('records-tbody');
   if (!tbody) return;
+  renderFilterSummary(records);
   if (records.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-6">尚無紀錄</td></tr>'; return;
   }
@@ -1936,8 +1944,6 @@ function renderRecordsTable(records) {
       ${pnlCell}${afterBalCell}${actionCell}
     </tr>`;
   }).join('');
-
-  renderFilterSummary(records);
 }
 
 // ============================================================
@@ -2233,8 +2239,11 @@ async function clearAllRecords() {
 // 項目篩選
 // ============================================================
 function renderProjectFilter() {
-  const sel = document.getElementById('filter-project'); if (!sel) return;
+  const sel = document.getElementById('filter-project');
+  const noteSel = document.getElementById('filter-note');
+  if (!sel) return;
   const prev = sel.value;
+  const prevNote = noteSel?.value || '';
   sel.innerHTML = '<option value="">全部項目</option>';
   const fromList    = cache.projects.map(p => p.label);
   const fromRecords = [...new Set(cache.records.map(r => r.project))];
@@ -2245,15 +2254,35 @@ function renderProjectFilter() {
     sel.appendChild(opt);
   });
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+
+  if (noteSel) {
+    noteSel.innerHTML = '<option value="">全部備註</option>';
+    const notes = [...new Set([
+      ...cache.tags,
+      ...cache.records.flatMap(r => {
+        const note = String(r.note || '').trim();
+        return note ? [note, ...note.split(/[、,，/]/).map(x => x.trim()).filter(Boolean)] : [];
+      })
+    ])].sort((a, b) => a.localeCompare(b, 'zh-TW'));
+    notes.forEach(note => {
+      const opt = document.createElement('option');
+      opt.value = note;
+      opt.textContent = note;
+      noteSel.appendChild(opt);
+    });
+    if (prevNote && [...noteSel.options].some(o => o.value === prevNote)) noteSel.value = prevNote;
+  }
 }
 function getFilteredRecords() {
-  const start = document.getElementById('filter-start').value;
-  const end   = document.getElementById('filter-end').value;
-  const proj  = document.getElementById('filter-project').value;
+  const start = document.getElementById('filter-start')?.value || '';
+  const end   = document.getElementById('filter-end')?.value || '';
+  const proj  = document.getElementById('filter-project')?.value || '';
+  const note  = document.getElementById('filter-note')?.value || '';
   let rec = cache.records;
   if (start) rec = rec.filter(r => r.date >= start);
   if (end)   rec = rec.filter(r => r.date <= end);
   if (proj)  rec = rec.filter(r => r.project === proj);
+  if (note)  rec = rec.filter(r => String(r.note || '').includes(note));
   return rec;
 }
 function filterRecords() { renderRecordsTable(getFilteredRecords()); }
@@ -2261,6 +2290,8 @@ function resetFilter() {
   document.getElementById('filter-start').value = '';
   document.getElementById('filter-end').value   = '';
   document.getElementById('filter-project').value = '';
+  const noteSel = document.getElementById('filter-note');
+  if (noteSel) noteSel.value = '';
   const s = document.getElementById('filter-summary');
   if (s) { s.classList.add('hidden'); s.innerHTML = ''; }
   renderRecordsTable(cache.records);
@@ -2302,7 +2333,7 @@ async function addNoteTag() {
   await db_saveNoteOdds(cache.noteOdds);
   input.value = '';
   if (oddsInput) oddsInput.value = DEFAULT_ODDS;
-  renderTagsManageList(); refreshAllProjectTags();
+  renderTagsManageList(); refreshAllProjectTags(); renderProjectFilter();
   showToast(existed ? `已更新「${text}」賠率 ${odds}x` : `已新增「${text}」賠率 ${odds}x`, 'ok');
 }
 async function deleteNoteTag(idx) {
@@ -2312,7 +2343,7 @@ async function deleteNoteTag(idx) {
   if (tag) delete cache.noteOdds[tag];
   await db_saveTags(tags);
   await db_saveNoteOdds(cache.noteOdds);
-  renderTagsManageList(); refreshAllProjectTags();
+  renderTagsManageList(); refreshAllProjectTags(); renderProjectFilter();
 }
 async function updateNoteTagOdds(idx, value) {
   const tag = cache.tags[idx];
@@ -2322,6 +2353,7 @@ async function updateNoteTagOdds(idx, value) {
   await db_saveNoteOdds(cache.noteOdds);
   renderTagsManageList();
   refreshAllProjectTags();
+  renderProjectFilter();
   showToast(`已更新「${tag}」賠率 ${odds}x`, 'ok');
 }
 function clickNoteTag(projId, text) {
