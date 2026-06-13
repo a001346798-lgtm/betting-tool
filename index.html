@@ -1478,10 +1478,10 @@ function buildProjectPage(proj) {
         <div class="inline-flex rounded-lg border border-slate-600 overflow-hidden bg-slate-800">
           <button type="button" id="pi-${id}-side-left"
             onclick="selectSportsSide('${id}', 'left')"
-            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">左邊</button>
+            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">客場</button>
           <button type="button" id="pi-${id}-side-right"
             onclick="selectSportsSide('${id}', 'right')"
-            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">右邊</button>
+            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">主場</button>
         </div>
       </div>
       <div class="flex gap-2 mb-2">
@@ -1924,10 +1924,10 @@ async function confirmBet(id) {
   if (betKind === 'sports') {
     if (!teamA || !teamB) { showToast('球類下注請選擇兩邊隊伍', 'error'); return; }
     if (teamA === teamB) { showToast('兩邊隊伍不能相同', 'error'); return; }
-    if (!sportsSide) { showToast('請選擇這筆下注是下左邊或右邊', 'error'); return; }
+    if (!sportsSide) { showToast('請選擇這筆下注是下客場或主場', 'error'); return; }
     const matchup = `球類、${teamA} vs ${teamB}`;
     const pickedTeam = sportsSide === 'left' ? teamA : teamB;
-    const sideText = sportsSide === 'left' ? '左邊' : '右邊';
+    const sideText = sportsSide === 'left' ? '客場' : '主場';
     const picked = `下注：${sideText} ${pickedTeam}`;
     note = rawNote ? `${matchup}、${picked}、${rawNote}` : `${matchup}、${picked}`;
   }
