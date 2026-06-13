@@ -1472,6 +1472,18 @@ function buildProjectPage(proj) {
           ${sportsTeamOptionsHtml()}
         </select>
       </div>
+      <div class="mb-2">
+        <div class="text-xs text-slate-500 mb-1.5">下注方</div>
+        <input type="hidden" id="pi-${id}-sports-side" value="" />
+        <div class="inline-flex rounded-lg border border-slate-600 overflow-hidden bg-slate-800">
+          <button type="button" id="pi-${id}-side-left"
+            onclick="selectSportsSide('${id}', 'left')"
+            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">左邊</button>
+          <button type="button" id="pi-${id}-side-right"
+            onclick="selectSportsSide('${id}', 'right')"
+            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">右邊</button>
+        </div>
+      </div>
       <div class="flex gap-2 mb-2">
         <input type="text" id="pi-${id}-new-team" placeholder="新增球隊，可用逗號一次多個"
           class="flex-1 min-w-0 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
@@ -1616,6 +1628,7 @@ function loadProjectDataToUI(id) {
   if (manualSettleEl) manualSettleEl.checked = false;
   toggleSettlementMode(id);
   selectBetKind(id, 'general');
+  selectSportsSide(id, '');
   refreshSportsTeamSelect(id);
 }
 
@@ -1891,10 +1904,12 @@ async function confirmBet(id) {
   const betKindEl = document.getElementById(`pi-${id}-bet-kind`);
   const teamAEl = document.getElementById(`pi-${id}-team-a`);
   const teamBEl = document.getElementById(`pi-${id}-team-b`);
+  const sportsSideEl = document.getElementById(`pi-${id}-sports-side`);
   const rawNote  = noteEl ? noteEl.value.trim() : '';
   const betKind  = betKindEl?.value === 'sports' ? 'sports' : 'general';
   const teamA    = teamAEl?.value || '';
   const teamB    = teamBEl?.value || '';
+  const sportsSide = sportsSideEl?.value || '';
   let note       = rawNote;
   const betDate  = dateEl?.value || getTodayStr();
   const betOdds  = parseOddsValue(oddsEl?.value || getOddsForNote(note));
@@ -1909,8 +1924,12 @@ async function confirmBet(id) {
   if (betKind === 'sports') {
     if (!teamA || !teamB) { showToast('球類下注請選擇兩邊隊伍', 'error'); return; }
     if (teamA === teamB) { showToast('兩邊隊伍不能相同', 'error'); return; }
+    if (!sportsSide) { showToast('請選擇這筆下注是下左邊或右邊', 'error'); return; }
     const matchup = `球類、${teamA} vs ${teamB}`;
-    note = rawNote ? `${matchup}、${rawNote}` : matchup;
+    const pickedTeam = sportsSide === 'left' ? teamA : teamB;
+    const sideText = sportsSide === 'left' ? '左邊' : '右邊';
+    const picked = `下注：${sideText} ${pickedTeam}`;
+    note = rawNote ? `${matchup}、${picked}、${rawNote}` : `${matchup}、${picked}`;
   }
 
   // Opt 6：防止同一項目同一指定日期重複下注
@@ -1947,6 +1966,7 @@ async function confirmBet(id) {
   if (noteEl) noteEl.value = '';
   if (teamAEl) teamAEl.value = '';
   if (teamBEl) teamBEl.value = '';
+  selectSportsSide(id, '');
   if (dateEl) dateEl.value = getTodayStr(); // 送出後重設回今日
   if (oddsEl) oddsEl.value = DEFAULT_ODDS;
   if (manualSettleEl) manualSettleEl.checked = false;
@@ -2522,6 +2542,12 @@ function betKindButtonClass(active) {
     : 'text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600';
 }
 
+function sportsSideButtonClass(active) {
+  return active
+    ? 'text-xs px-3 py-1.5 bg-emerald-700 text-white font-semibold'
+    : 'text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600';
+}
+
 function selectBetKind(projId, kind) {
   const isSports = kind === 'sports';
   const hidden = document.getElementById(`pi-${projId}-bet-kind`);
@@ -2532,6 +2558,16 @@ function selectBetKind(projId, kind) {
   if (sportsWrap) sportsWrap.classList.toggle('hidden', !isSports);
   if (generalBtn) generalBtn.className = betKindButtonClass(!isSports);
   if (sportsBtn) sportsBtn.className = betKindButtonClass(isSports);
+}
+
+function selectSportsSide(projId, side) {
+  const normalized = side === 'left' || side === 'right' ? side : '';
+  const hidden = document.getElementById(`pi-${projId}-sports-side`);
+  const leftBtn = document.getElementById(`pi-${projId}-side-left`);
+  const rightBtn = document.getElementById(`pi-${projId}-side-right`);
+  if (hidden) hidden.value = normalized;
+  if (leftBtn) leftBtn.className = sportsSideButtonClass(normalized === 'left');
+  if (rightBtn) rightBtn.className = sportsSideButtonClass(normalized === 'right');
 }
 
 function renderSportsTeamList(projId) {
