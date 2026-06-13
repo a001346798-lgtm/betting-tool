@@ -770,6 +770,8 @@ async function syncFromCloud() {
     renderStatsPanel();
     // 更新所有項目頁面的餘額顯示
     cache.projects.forEach(p => {
+      const initEl = document.getElementById(`pi-${p.id}-initial`);
+      if (initEl && document.activeElement !== initEl) initEl.value = p.initialCapital;
       const balEl = document.getElementById(`pi-${p.id}-balance`);
       if (balEl && document.activeElement !== balEl) balEl.value = p.currentBalance;
       updatePnlROI(p.id);
@@ -1183,12 +1185,27 @@ function renderProjectMgmtList() {
   if (list.length === 0) { container.innerHTML = '<div class="text-xs text-slate-500 text-center py-3">尚無項目</div>'; return; }
   container.innerHTML = list.map((p, i) => {
     const c = getColor(p.colorIdx);
+    const initialValue = Number.isFinite(parseFloat(p.initialCapital)) ? round2(parseFloat(p.initialCapital)) : 0;
+    const balanceValue = Number.isFinite(parseFloat(p.currentBalance)) ? round2(parseFloat(p.currentBalance)) : 0;
     return `
     <div class="flex items-center gap-2 bg-slate-700 rounded-lg px-3 py-2 flex-wrap">
       <span class="w-3 h-3 rounded-full flex-shrink-0" style="background:${c.sliderColor}"></span>
       <span class="text-xs text-slate-500">#${i+1}</span>
       <span class="flex-1 text-sm font-semibold truncate min-w-0">${escHtml(p.label)}</span>
-      <span class="text-xs text-slate-400">餘額:&nbsp;${formatNum(p.currentBalance||0)}</span>
+      <label class="text-xs text-slate-400 flex items-center gap-1 whitespace-nowrap">
+        本金
+        <input type="number" id="pm-${p.id}-initial" value="${initialValue}" min="0" inputmode="decimal"
+          class="w-24 bg-slate-800 text-slate-100 px-2 py-1 rounded border border-slate-600 outline-none focus:border-indigo-400"
+          onchange="onOverviewInitialChange('${p.id}', this.value)"
+          onkeydown="if(event.key==='Enter') this.blur()" />
+      </label>
+      <label class="text-xs text-slate-400 flex items-center gap-1 whitespace-nowrap">
+        餘額
+        <input type="number" id="pm-${p.id}-balance" value="${balanceValue}" inputmode="decimal"
+          class="w-24 bg-slate-800 text-slate-100 px-2 py-1 rounded border border-slate-600 outline-none focus:border-indigo-400"
+          onchange="onOverviewBalanceChange('${p.id}', this.value)"
+          onkeydown="if(event.key==='Enter') this.blur()" />
+      </label>
       <button onclick="renameProject('${p.id}')" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-2 py-1 rounded">✏ 改名</button>
       <button onclick="changeProjectColor('${p.id}')" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-2 py-1 rounded">🎨 換色</button>
       <button onclick="deleteProject('${p.id}')" class="text-xs bg-red-800 hover:bg-red-700 text-white px-2 py-1 rounded">🗑 刪除</button>
@@ -1645,21 +1662,56 @@ function drawBalanceChart(id) {
 // ============================================================
 // 事件處理
 // ============================================================
-function onInitialChange(id) {
-  const val = parseFloat(document.getElementById(`pi-${id}-initial`).value) || 0;
+function setInputValueIfIdle(inputId, value) {
+  const el = document.getElementById(inputId);
+  if (el && document.activeElement !== el) el.value = value;
+}
+
+function syncProjectFundsUI(id) {
+  const p = cache.projects.find(p => p.id === id); if (!p) return;
+  const initial = Number.isFinite(parseFloat(p.initialCapital)) ? round2(parseFloat(p.initialCapital)) : 0;
+  const balance = Number.isFinite(parseFloat(p.currentBalance)) ? round2(parseFloat(p.currentBalance)) : 0;
+  setInputValueIfIdle(`pi-${id}-initial`, initial);
+  setInputValueIfIdle(`pi-${id}-balance`, balance);
+  setInputValueIfIdle(`pm-${id}-initial`, initial);
+  setInputValueIfIdle(`pm-${id}-balance`, balance);
+  updatePnlROI(id);
+  updateSuggestBet(id);
+  drawBalanceChart(id);
+  renderOverviewCards();
+}
+
+function applyInitialCapitalChange(id, rawValue, options = {}) {
+  const val = parseFloat(rawValue) || 0;
   const p = cache.projects.find(p => p.id === id); if (!p) return;
   p.initialCapital = val;
-  if (!p.currentBalance) { p.currentBalance = val; document.getElementById(`pi-${id}-balance`).value = val; }
+  if (!p.currentBalance) p.currentBalance = val;
   db_upsertProject(p);
-  updatePnlROI(id); updateSuggestBet(id);
+  syncProjectFundsUI(id);
+  if (options.toast) showToast(`已更新「${p.label}」本金`, 'ok');
 }
-function onBalanceChange(id) {
-  const val = parseFloat(document.getElementById(`pi-${id}-balance`).value) || 0;
+
+function applyCurrentBalanceChange(id, rawValue, options = {}) {
+  const val = parseFloat(rawValue) || 0;
   const p = cache.projects.find(p => p.id === id); if (!p) return;
   p.currentBalance = val;
-  if (p.manualPct) { p.manualBet = round2(val * p.manualPct / 100); const el = document.getElementById(`pi-${id}-manual-bet`); if (el) el.value = p.manualBet; }
+  if (p.manualPct) p.manualBet = round2(val * p.manualPct / 100);
   db_upsertProject(p);
-  updatePnlROI(id); updateSuggestBet(id);
+  syncProjectFundsUI(id);
+  if (options.toast) showToast(`已更新「${p.label}」餘額`, 'ok');
+}
+
+function onInitialChange(id) {
+  applyInitialCapitalChange(id, document.getElementById(`pi-${id}-initial`).value);
+}
+function onBalanceChange(id) {
+  applyCurrentBalanceChange(id, document.getElementById(`pi-${id}-balance`).value);
+}
+function onOverviewInitialChange(id, value) {
+  applyInitialCapitalChange(id, value, { toast: true });
+}
+function onOverviewBalanceChange(id, value) {
+  applyCurrentBalanceChange(id, value, { toast: true });
 }
 function onSliderChange(id, val) {
   val = parseFloat(val);
