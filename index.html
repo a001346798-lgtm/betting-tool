@@ -555,6 +555,7 @@ const SK_DATA    = id => `proj_data_${id}`;
 const SK_RECORDS = 'betting_records';
 const SK_TAGS    = 'note_tags';
 const SK_NOTE_ODDS = 'note_odds_map';
+const SK_SPORTS_TEAMS = 'sports_teams';
 // Supabase config keys（存於 localStorage）
 const SK_SB_URL  = 'sb_url';
 const SK_SB_KEY  = 'sb_anon_key';
@@ -691,6 +692,7 @@ const cache = {
   projects: [], // 合併 list + data：{ id, label, colorIdx, sortOrder, initialCapital, currentBalance, sliderPct, manualBet, manualPct }
   records:  [], // 與原始格式相同
   tags:     [],
+  sportsTeams: [],
   noteOdds: { ...DEFAULT_NOTE_ODDS_MAP }
 };
 
@@ -702,16 +704,18 @@ async function fetchAll() {
   showLoading(true, '正在從雲端讀取資料…');
   try {
     if (isCloud()) {
-      const [pRes, rRes, sRes, oRes] = await Promise.all([
+      const [pRes, rRes, sRes, oRes, teamRes] = await Promise.all([
         sb.from('projects').select('*').order('sort_order', { ascending: true }),
         sb.from('betting_records').select('*').order('id', { ascending: false }),
         sb.from('app_settings').select('value').eq('key', 'note_tags').maybeSingle(),
-        sb.from('app_settings').select('value').eq('key', 'note_odds_map').maybeSingle()
+        sb.from('app_settings').select('value').eq('key', 'note_odds_map').maybeSingle(),
+        sb.from('app_settings').select('value').eq('key', 'sports_teams').maybeSingle()
       ]);
       if (pRes.error) throw pRes.error;
       if (rRes.error) throw rRes.error;
 
       cache.tags     = sRes.data?.value || [...DEFAULT_TAGS];
+      cache.sportsTeams = normalizeSportsTeams(teamRes.data?.value || []);
       applyNoteOddsMap(oRes.data?.value || {});
       cache.projects = (pRes.data || []).map(dbToProject);
       cache.records  = (rRes.data || []).map(dbToRecord);
@@ -735,16 +739,18 @@ async function syncFromCloud() {
   if (!isCloud() || _syncLock) return;
   _syncLock = true;
   try {
-    const [pRes, rRes, sRes, oRes] = await Promise.all([
+    const [pRes, rRes, sRes, oRes, teamRes] = await Promise.all([
       sb.from('projects').select('*').order('sort_order', { ascending: true }),
       sb.from('betting_records').select('*').order('id', { ascending: false }),
       sb.from('app_settings').select('value').eq('key', 'note_tags').maybeSingle(),
-      sb.from('app_settings').select('value').eq('key', 'note_odds_map').maybeSingle()
+      sb.from('app_settings').select('value').eq('key', 'note_odds_map').maybeSingle(),
+      sb.from('app_settings').select('value').eq('key', 'sports_teams').maybeSingle()
     ]);
     if (pRes.error || rRes.error) return; // 靜默失敗，不打擾使用者
 
     // 以雲端資料完全覆蓋 cache（包含 status、pnl、balance 等最新狀態）
     cache.tags = sRes.data?.value || cache.tags;
+    cache.sportsTeams = normalizeSportsTeams(teamRes.data?.value || cache.sportsTeams);
     applyNoteOddsMap(oRes.data?.value || cache.noteOdds);
     cache.projects = (pRes.data || []).map(dbToProject);
     cache.records  = (rRes.data || []).map(dbToRecord);
@@ -765,6 +771,7 @@ async function syncFromCloud() {
     renderProjectMgmtList();
     renderTagsManageList();
     refreshAllProjectTags();
+    refreshAllSportsTeamControls();
     renderProjectFilter();
     renderRecordsTable(getFilteredRecords());
     renderStatsPanel();
@@ -947,6 +954,23 @@ async function db_saveNoteOdds(map) {
   }
 }
 
+function normalizeSportsTeams(list = []) {
+  return [...new Set((Array.isArray(list) ? list : [])
+    .map(x => String(x || '').trim())
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'zh-TW'));
+}
+
+async function db_saveSportsTeams(teams) {
+  cache.sportsTeams = normalizeSportsTeams(teams);
+  if (isCloud()) {
+    const { error } = await sb.from('app_settings').upsert({ key: 'sports_teams', value: cache.sportsTeams });
+    if (error) showToast('⚠️ 球隊儲存失敗：' + error.message, 'error');
+  } else {
+    localStorage.setItem(SK_SPORTS_TEAMS, JSON.stringify(cache.sportsTeams));
+  }
+}
+
 // ============================================================
 // LocalStorage fallback（非 Supabase 模式）
 // ============================================================
@@ -970,12 +994,15 @@ function loadCacheFromLocalStorage() {
   }
   const recRaw   = localStorage.getItem(SK_RECORDS);
   const oddsRaw  = localStorage.getItem(SK_NOTE_ODDS);
+  const teamsRaw = localStorage.getItem(SK_SPORTS_TEAMS);
   applyNoteOddsMap(oddsRaw ? JSON.parse(oddsRaw) : {});
+  cache.sportsTeams = teamsRaw ? normalizeSportsTeams(JSON.parse(teamsRaw)) : [];
   cache.records  = recRaw ? JSON.parse(recRaw).map(normalizeRecordBalanceFields) : [];
   const tagRaw   = localStorage.getItem(SK_TAGS);
   cache.tags     = tagRaw ? JSON.parse(tagRaw) : [...DEFAULT_TAGS];
   if (!tagRaw) localStorage.setItem(SK_TAGS, JSON.stringify(DEFAULT_TAGS));
   if (!oddsRaw) localStorage.setItem(SK_NOTE_ODDS, JSON.stringify(cache.noteOdds));
+  if (!teamsRaw) localStorage.setItem(SK_SPORTS_TEAMS, JSON.stringify(cache.sportsTeams));
 }
 
 function writeCacheToLocalStorage() {
@@ -990,6 +1017,7 @@ function writeCacheToLocalStorage() {
   localStorage.setItem(SK_RECORDS, JSON.stringify(cache.records));
   localStorage.setItem(SK_TAGS,    JSON.stringify(cache.tags));
   localStorage.setItem(SK_NOTE_ODDS, JSON.stringify(cache.noteOdds));
+  localStorage.setItem(SK_SPORTS_TEAMS, JSON.stringify(cache.sportsTeams));
 }
 
 // ============================================================
@@ -1419,6 +1447,40 @@ function buildProjectPage(proj) {
     <input type="text" id="pi-${id}-note" placeholder="備註（選填）"
       class="w-full mb-2 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
       oninput="autoFillOdds('${id}')" />
+    <div class="mb-3">
+      <div class="text-xs text-slate-500 mb-1.5">下注類型</div>
+      <input type="hidden" id="pi-${id}-bet-kind" value="general" />
+      <div class="inline-flex rounded-lg border border-slate-600 overflow-hidden bg-slate-800">
+        <button type="button" id="pi-${id}-kind-general"
+          onclick="selectBetKind('${id}', 'general')"
+          class="text-xs px-3 py-1.5 bg-sky-700 text-white font-semibold">一般</button>
+        <button type="button" id="pi-${id}-kind-sports"
+          onclick="selectBetKind('${id}', 'sports')"
+          class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">球類</button>
+      </div>
+    </div>
+    <div id="pi-${id}-sports-wrap" class="hidden mb-3 bg-slate-900/60 rounded-lg border border-slate-700 p-3">
+      <div class="text-xs text-slate-500 mb-2">球類對戰</div>
+      <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-center mb-2">
+        <select id="pi-${id}-team-a"
+          class="min-w-0 bg-slate-700 text-slate-100 px-2 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500">
+          ${sportsTeamOptionsHtml()}
+        </select>
+        <span class="text-xs text-slate-500 text-center">vs</span>
+        <select id="pi-${id}-team-b"
+          class="min-w-0 bg-slate-700 text-slate-100 px-2 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500">
+          ${sportsTeamOptionsHtml()}
+        </select>
+      </div>
+      <div class="flex gap-2 mb-2">
+        <input type="text" id="pi-${id}-new-team" placeholder="新增球隊，可用逗號一次多個"
+          class="flex-1 min-w-0 bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-sm border border-slate-600 outline-none focus:border-sky-500"
+          onkeydown="if(event.key==='Enter') addSportsTeamsFromInput('${id}')" />
+        <button type="button" onclick="addSportsTeamsFromInput('${id}')"
+          class="text-xs bg-slate-600 hover:bg-slate-500 text-white px-3 rounded-lg font-semibold whitespace-nowrap">＋ 新增</button>
+      </div>
+      <div id="pi-${id}-sports-team-list" class="flex flex-wrap gap-1.5"></div>
+    </div>
     <!-- 結算方式：賠率自動換算，或球類等情境在贏時手動輸入實際獲利 -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
       <div id="pi-${id}-odds-wrap" class="flex items-center gap-2">
@@ -1553,6 +1615,8 @@ function loadProjectDataToUI(id) {
   const manualSettleEl = g(`pi-${id}-manual-settle`);
   if (manualSettleEl) manualSettleEl.checked = false;
   toggleSettlementMode(id);
+  selectBetKind(id, 'general');
+  refreshSportsTeamSelect(id);
 }
 
 function toggleSettlementMode(id) {
@@ -1824,7 +1888,14 @@ async function confirmBet(id) {
   const dateEl   = document.getElementById(`pi-${id}-bet-date`);
   const oddsEl   = document.getElementById(`pi-${id}-odds`);
   const manualSettleEl = document.getElementById(`pi-${id}-manual-settle`);
-  const note     = noteEl ? noteEl.value.trim() : '';
+  const betKindEl = document.getElementById(`pi-${id}-bet-kind`);
+  const teamAEl = document.getElementById(`pi-${id}-team-a`);
+  const teamBEl = document.getElementById(`pi-${id}-team-b`);
+  const rawNote  = noteEl ? noteEl.value.trim() : '';
+  const betKind  = betKindEl?.value === 'sports' ? 'sports' : 'general';
+  const teamA    = teamAEl?.value || '';
+  const teamB    = teamBEl?.value || '';
+  let note       = rawNote;
   const betDate  = dateEl?.value || getTodayStr();
   const betOdds  = parseOddsValue(oddsEl?.value || getOddsForNote(note));
   const settleMode = manualSettleEl?.checked ? 'manual' : 'odds';
@@ -1835,6 +1906,12 @@ async function confirmBet(id) {
 
   if (actualBet <= 0) { showToast('下注金額必須大於 0！', 'error'); return; }
   if (actualBet > bal && !confirm(`下注額（${formatNum(actualBet)}）大於餘額（${formatNum(bal)}），確定？`)) return;
+  if (betKind === 'sports') {
+    if (!teamA || !teamB) { showToast('球類下注請選擇兩邊隊伍', 'error'); return; }
+    if (teamA === teamB) { showToast('兩邊隊伍不能相同', 'error'); return; }
+    const matchup = `球類、${teamA} vs ${teamB}`;
+    note = rawNote ? `${matchup}、${rawNote}` : matchup;
+  }
 
   // Opt 6：防止同一項目同一指定日期重複下注
   const dupPending = cache.records.find(
@@ -1868,6 +1945,8 @@ async function confirmBet(id) {
   await db_upsertProject(p);
 
   if (noteEl) noteEl.value = '';
+  if (teamAEl) teamAEl.value = '';
+  if (teamBEl) teamBEl.value = '';
   if (dateEl) dateEl.value = getTodayStr(); // 送出後重設回今日
   if (oddsEl) oddsEl.value = DEFAULT_ODDS;
   if (manualSettleEl) manualSettleEl.checked = false;
@@ -2428,6 +2507,90 @@ function jsArg(value) {
   return JSON.stringify(String(value ?? '')).replace(/</g, '\\u003c');
 }
 
+function sportsTeamOptionsHtml(selected = '') {
+  const opts = ['<option value="">選擇隊伍</option>'];
+  cache.sportsTeams.forEach(team => {
+    const sel = team === selected ? ' selected' : '';
+    opts.push(`<option value="${escHtml(team)}"${sel}>${escHtml(team)}</option>`);
+  });
+  return opts.join('');
+}
+
+function betKindButtonClass(active) {
+  return active
+    ? 'text-xs px-3 py-1.5 bg-sky-700 text-white font-semibold'
+    : 'text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600';
+}
+
+function selectBetKind(projId, kind) {
+  const isSports = kind === 'sports';
+  const hidden = document.getElementById(`pi-${projId}-bet-kind`);
+  const sportsWrap = document.getElementById(`pi-${projId}-sports-wrap`);
+  const generalBtn = document.getElementById(`pi-${projId}-kind-general`);
+  const sportsBtn = document.getElementById(`pi-${projId}-kind-sports`);
+  if (hidden) hidden.value = isSports ? 'sports' : 'general';
+  if (sportsWrap) sportsWrap.classList.toggle('hidden', !isSports);
+  if (generalBtn) generalBtn.className = betKindButtonClass(!isSports);
+  if (sportsBtn) sportsBtn.className = betKindButtonClass(isSports);
+}
+
+function renderSportsTeamList(projId) {
+  const container = document.getElementById(`pi-${projId}-sports-team-list`);
+  if (!container) return;
+  if (cache.sportsTeams.length === 0) {
+    container.innerHTML = '<span class="text-xs text-slate-600">尚無球隊，先新增常用隊伍</span>';
+    return;
+  }
+  container.innerHTML = cache.sportsTeams.map(team => `
+    <span class="inline-flex items-center gap-1 bg-slate-700 text-slate-200 text-xs px-2 py-0.5 rounded-full border border-slate-600">
+      ${escHtml(team)}
+      <button type="button" onclick='deleteSportsTeam(${jsArg(team)})'
+        class="text-slate-400 hover:text-rose-400 text-sm font-bold leading-none">×</button>
+    </span>`).join('');
+}
+
+function refreshSportsTeamSelect(projId) {
+  const a = document.getElementById(`pi-${projId}-team-a`);
+  const b = document.getElementById(`pi-${projId}-team-b`);
+  if (a) {
+    const prev = a.value;
+    a.innerHTML = sportsTeamOptionsHtml(prev);
+    if (prev && cache.sportsTeams.includes(prev)) a.value = prev;
+  }
+  if (b) {
+    const prev = b.value;
+    b.innerHTML = sportsTeamOptionsHtml(prev);
+    if (prev && cache.sportsTeams.includes(prev)) b.value = prev;
+  }
+  renderSportsTeamList(projId);
+}
+
+function refreshAllSportsTeamControls() {
+  cache.projects.forEach(p => refreshSportsTeamSelect(p.id));
+}
+
+async function addSportsTeamsFromInput(projId) {
+  const input = document.getElementById(`pi-${projId}-new-team`);
+  if (!input) return;
+  const names = input.value
+    .split(/[、,，\n]/)
+    .map(x => x.trim())
+    .filter(Boolean);
+  if (names.length === 0) return;
+  const before = cache.sportsTeams.length;
+  await db_saveSportsTeams([...cache.sportsTeams, ...names]);
+  input.value = '';
+  refreshAllSportsTeamControls();
+  const added = cache.sportsTeams.length - before;
+  showToast(added > 0 ? `已新增 ${added} 個球隊` : '球隊已存在', added > 0 ? 'ok' : 'info');
+}
+
+async function deleteSportsTeam(team) {
+  await db_saveSportsTeams(cache.sportsTeams.filter(x => x !== team));
+  refreshAllSportsTeamControls();
+  showToast(`已移除「${team}」`, 'info');
+}
+
 async function addNoteTag() {
   const input = document.getElementById('new-tag-input');
   const oddsInput = document.getElementById('new-tag-odds');
@@ -2515,7 +2678,8 @@ function exportJSON() {
   const list = cache.projects.map(p => ({ id: p.id, label: p.label, colorIdx: p.colorIdx }));
   downloadFile(
     JSON.stringify({ exportDate: new Date().toISOString(), version:2,
-      projectList: list, projectData, records: cache.records, noteTags: cache.tags, noteOdds: cache.noteOdds }, null, 2),
+      projectList: list, projectData, records: cache.records, noteTags: cache.tags,
+      noteOdds: cache.noteOdds, sportsTeams: cache.sportsTeams }, null, 2),
     `betting_backup_${getTodayStr()}.json`, 'application/json');
 }
 
@@ -2563,6 +2727,7 @@ async function importData(event) {
         });
         cache.records = (data.records || []).map(normalizeRecordBalanceFields);
         cache.tags    = data.noteTags || [...DEFAULT_TAGS];
+        cache.sportsTeams = normalizeSportsTeams(data.sportsTeams || []);
         applyNoteOddsMap(data.noteOdds || {});
       } else if (data.projects) {
         cache.projects = []; let i = 0;
@@ -2575,6 +2740,7 @@ async function importData(event) {
         }
         cache.records = (data.records || []).map(normalizeRecordBalanceFields);
         cache.tags    = [...DEFAULT_TAGS];
+        cache.sportsTeams = [];
         applyNoteOddsMap({});
       } else { throw new Error('無法識別格式'); }
 
@@ -2587,6 +2753,7 @@ async function importData(event) {
         }
         await db_saveTags(cache.tags);
         await db_saveNoteOdds(cache.noteOdds);
+        await db_saveSportsTeams(cache.sportsTeams);
       } else {
         writeCacheToLocalStorage();
       }
