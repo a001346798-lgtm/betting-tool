@@ -472,12 +472,18 @@ const DEFAULT_NOTE_ODDS_MAP = {
 };
 const NOTE_ODDS_MAP = { ...DEFAULT_NOTE_ODDS_MAP };
 const DEFAULT_ODDS = 1.0;
+const DEFAULT_LOSS_RATE = 1.0;
 let dbSupportsOddsColumn = true;
 let dbSupportsSettleModeColumn = true;
 
 function parseOddsValue(value) {
   const num = parseFloat(value);
   return Number.isFinite(num) && num >= 1 ? round2(num) : DEFAULT_ODDS;
+}
+
+function parseLossRateValue(value) {
+  const num = parseFloat(value);
+  return Number.isFinite(num) ? round2(num) : null;
 }
 
 function getSupabaseErrorText(error) {
@@ -1985,7 +1991,7 @@ async function confirmBet(id) {
 // ============================================================
 // 第二階段：贏/輸結算
 // 【贏】p.balance += profit（損益加入）
-// 【輸】p.balance -= bet（扣除下注額）
+// 【輸】p.balance -= bet * lossRate（預設 1.0，等同扣除下注額）
 // afterBal 以「結算當下的真實餘額」計算
 // ============================================================
 async function settleRecord(recordId, type) {
@@ -2028,11 +2034,15 @@ async function settleRecord(recordId, type) {
 
   } else {
     const input = prompt(
-      `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【虧損金額】\n（Enter = 下注額 = ${formatNum(rec.bet)}）：`,
-      rec.bet);
+      `【🔴 輸（損）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【輸倍率】（0.10 ~ 1.0）\nEnter = 1.0 = 輸下注額 ${formatNum(rec.bet)}\n例如 0.60 = 只輸 ${formatNum(round2(rec.bet * 0.6))}`,
+      DEFAULT_LOSS_RATE);
     if (input === null) return;
-    const loss = parseFloat(input);
-    if (isNaN(loss) || loss < 0) { showToast('請輸入有效金額', 'error'); return; }
+    const lossRate = parseLossRateValue(input === '' ? DEFAULT_LOSS_RATE : input);
+    if (lossRate === null || lossRate < 0.1 || lossRate > 1) {
+      showToast('請輸入 0.10 到 1.0 的輸倍率', 'error');
+      return;
+    }
+    const loss = round2(rec.bet * lossRate);
 
     saveUndo({ type: 'settleRecord', projId: rec.projectId, prevBalance, recordId, prevRecord });
 
