@@ -486,6 +486,16 @@ function parseLossRateValue(value) {
   return Number.isFinite(num) ? round2(num) : null;
 }
 
+function parseWinProfitValue(value, bet) {
+  const num = parseFloat(value);
+  if (!Number.isFinite(num) || num < 0) return null;
+  if (num <= 3) {
+    if (num < 0.1) return null;
+    return round2(bet * num);
+  }
+  return round2(num);
+}
+
 function getSupabaseErrorText(error) {
   return [error?.message, error?.details, error?.hint, error?.code]
     .filter(Boolean)
@@ -2002,19 +2012,19 @@ async function settleRecord(recordId, type) {
   const prevBalance = p ? parseFloat(p.currentBalance) : null;
   const baseBalance = Number.isFinite(prevBalance) ? round2(prevBalance) : (parseFloat(rec.initBal) || 0);
   const prevRecord = { initBal: rec.initBal, pnl: rec.pnl, afterBal: rec.afterBal, status: rec.status };
-  const isManualSettle = normalizeSettleMode(rec.settleMode) === 'manual';
 
   if (type === 'win') {
     const recOdds      = parseOddsValue(rec.odds ?? getOddsForNote(rec.note));
     const defaultProfit = round2(rec.bet * recOdds);
     const input = prompt(
-      isManualSettle
-        ? `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【實際獲利金額】：`
-        : `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}　賠率：${recOdds}x\n\n請輸入本次【獲利金額】\n（Enter = 下注額 × 賠率 = ${formatNum(defaultProfit)}）：`,
-      isManualSettle ? '' : defaultProfit);
+      `【🟢 贏（益）】\n項目：${rec.project}　下注額：${formatNum(rec.bet)}\n\n請輸入本次【贏倍率或獲利金額】\n0.10 ~ 3.0 = 視為賠率，例如 0.90 = ${formatNum(round2(rec.bet * 0.9))}\n大於 3 = 視為直接獲利金額，例如 4500 = +4,500\nEnter = ${recOdds}x = ${formatNum(defaultProfit)}`,
+      recOdds);
     if (input === null) return;
-    const profit = parseFloat(input);
-    if (isNaN(profit) || profit < 0) { showToast('請輸入有效金額', 'error'); return; }
+    const profit = parseWinProfitValue(input === '' ? recOdds : input, rec.bet);
+    if (profit === null) {
+      showToast('請輸入 0.10 到 3.0 的贏倍率，或直接輸入獲利金額', 'error');
+      return;
+    }
 
     saveUndo({ type: 'settleRecord', projId: rec.projectId, prevBalance, recordId, prevRecord });
 
