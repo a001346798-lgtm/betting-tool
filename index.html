@@ -819,6 +819,10 @@ function isWonRecord(r)  { return r.status === 'won'  || (r.status === 'settled'
 // 統一判斷紀錄是否為「輸」（相容新 lost / 舊 settled+負pnl）
 function isLostRecord(r) { return r.status === 'lost' || (r.status === 'settled' && (r.pnl || 0) < 0); }
 
+function formatSportsNoteForDisplay(note) {
+  return String(note || '').replace(/下注：(主場|客場)\s+[^、]+/g, '下注：$1');
+}
+
 function dbToRecord(r) {
   return normalizeRecordBalanceFields({ id: r.id, projectId: r.project_id, date: r.date, project: r.project,
     initBal: r.init_bal, pct: r.pct, bet: r.bet, pnl: r.pnl, afterBal: r.after_bal,
@@ -1926,9 +1930,8 @@ async function confirmBet(id) {
     if (teamA === teamB) { showToast('兩邊隊伍不能相同', 'error'); return; }
     if (!sportsSide) { showToast('請選擇這筆下注是下客場或主場', 'error'); return; }
     const matchup = `球類、${teamA} vs ${teamB}`;
-    const pickedTeam = sportsSide === 'left' ? teamA : teamB;
     const sideText = sportsSide === 'left' ? '客場' : '主場';
-    const picked = `下注：${sideText} ${pickedTeam}`;
+    const picked = `下注：${sideText}`;
     note = rawNote ? `${matchup}、${picked}、${rawNote}` : `${matchup}、${picked}`;
   }
 
@@ -1969,7 +1972,7 @@ async function confirmBet(id) {
   selectSportsSide(id, '');
   if (dateEl) dateEl.value = getTodayStr(); // 送出後重設回今日
   if (oddsEl) oddsEl.value = DEFAULT_ODDS;
-  if (manualSettleEl) manualSettleEl.checked = false;
+  if (manualSettleEl) manualSettleEl.checked = betKind === 'sports';
   toggleSettlementMode(id);
   const mb2 = document.getElementById(`pi-${id}-manual-bet`); if (mb2) mb2.value = '';
   const mp2 = document.getElementById(`pi-${id}-manual-pct`); if (mp2) mp2.value = '';
@@ -2122,11 +2125,12 @@ function renderRecordsTable(records) {
 
     const statusIcon = isWon ? '🟢' : isLost ? '🔴' : '';
     const noteText = String(r.note || '').trim();
+    const displayNoteText = formatSportsNoteForDisplay(noteText);
     const modeBadge = normalizeSettleMode(r.settleMode) === 'manual'
       ? `<span class="inline-block text-[11px] px-1.5 py-0.5 rounded bg-sky-900/60 text-sky-200 border border-sky-700/60 ml-1 align-middle">手動</span>`
       : '';
     const noteCell = noteText
-      ? `<td title="${escHtml(noteText)}"><span class="inline-block max-w-[120px] truncate align-middle text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-200 border border-slate-600">${escHtml(noteText)}</span>${modeBadge}</td>`
+      ? `<td title="${escHtml(displayNoteText)}"><span class="inline-block max-w-[120px] truncate align-middle text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-200 border border-slate-600">${escHtml(displayNoteText)}</span>${modeBadge}</td>`
       : `<td class="text-slate-500 text-xs">—${modeBadge}</td>`;
 
     const editBtn = `<button onclick="openEditModal(${r.id})" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 px-2 py-1 rounded">✏️</button>`;
@@ -2554,10 +2558,15 @@ function selectBetKind(projId, kind) {
   const sportsWrap = document.getElementById(`pi-${projId}-sports-wrap`);
   const generalBtn = document.getElementById(`pi-${projId}-kind-general`);
   const sportsBtn = document.getElementById(`pi-${projId}-kind-sports`);
+  const manualSettleEl = document.getElementById(`pi-${projId}-manual-settle`);
   if (hidden) hidden.value = isSports ? 'sports' : 'general';
   if (sportsWrap) sportsWrap.classList.toggle('hidden', !isSports);
   if (generalBtn) generalBtn.className = betKindButtonClass(!isSports);
   if (sportsBtn) sportsBtn.className = betKindButtonClass(isSports);
+  if (manualSettleEl) {
+    manualSettleEl.checked = isSports;
+    toggleSettlementMode(projId);
+  }
 }
 
 function selectSportsSide(projId, side) {
