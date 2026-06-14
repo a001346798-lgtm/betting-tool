@@ -2426,6 +2426,11 @@ async function deleteRecord(id) {
 
 async function clearAllRecords() {
   if (!confirm('⚠️ 確定要清空全部紀錄嗎？\n所有項目餘額將重設回初始本金，此操作無法復原！')) return;
+  const confirmText = prompt('最後確認：請輸入「清空全部」才會執行。\n\n此動作會刪除所有歷史紀錄，並把所有項目餘額重設回初始本金。');
+  if (confirmText !== '清空全部') {
+    showToast('已取消清空全部', 'info');
+    return;
+  }
 
   // 【安全邊界】此函數只操作紀錄與項目餘額，絕對不呼叫 localStorage.clear()
   // Supabase 連線設定（SK_SB_URL / SK_SB_KEY）永遠不受影響
