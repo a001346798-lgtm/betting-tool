@@ -2195,6 +2195,12 @@ function renderRecordsTable(records) {
 function renderFilterSummary(records) {
   const el = document.getElementById('filter-summary');
   if (!el) return;
+  const hasFilter =
+    !!document.getElementById('filter-start')?.value ||
+    !!document.getElementById('filter-end')?.value ||
+    !!document.getElementById('filter-project')?.value ||
+    !!document.getElementById('filter-note')?.value;
+  if (!hasFilter) { el.classList.add('hidden'); el.innerHTML = ''; return; }
 
   // 全部隱藏時不顯示摘要
   if (!records || records.length === 0) { el.classList.add('hidden'); el.innerHTML = ''; return; }
