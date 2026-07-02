@@ -1495,7 +1495,7 @@ function buildProjectPage(proj) {
         </select>
       </div>
       <div class="mb-2">
-        <div class="text-xs text-slate-500 mb-1.5">下注方</div>
+        <div class="text-xs text-slate-500 mb-1.5">投注選項</div>
         <input type="hidden" id="pi-${id}-sports-side" value="" />
         <div class="inline-flex rounded-lg border border-slate-600 overflow-hidden bg-slate-800">
           <button type="button" id="pi-${id}-side-left"
@@ -1504,6 +1504,12 @@ function buildProjectPage(proj) {
           <button type="button" id="pi-${id}-side-right"
             onclick="selectSportsSide('${id}', 'right')"
             class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">主場</button>
+          <button type="button" id="pi-${id}-side-over"
+            onclick="selectSportsSide('${id}', 'over')"
+            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">大分</button>
+          <button type="button" id="pi-${id}-side-under"
+            onclick="selectSportsSide('${id}', 'under')"
+            class="text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600">小分</button>
         </div>
       </div>
       <div class="flex gap-2 mb-2">
@@ -1946,9 +1952,9 @@ async function confirmBet(id) {
   if (betKind === 'sports') {
     if (!teamA || !teamB) { showToast('球類下注請選擇兩邊隊伍', 'error'); return; }
     if (teamA === teamB) { showToast('兩邊隊伍不能相同', 'error'); return; }
-    if (!sportsSide) { showToast('請選擇這筆下注是下客場或主場', 'error'); return; }
+    if (!sportsSideText(sportsSide)) { showToast('請選擇這筆下注是客場、主場、大分或小分', 'error'); return; }
     const matchup = `球類、${teamA} vs ${teamB}`;
-    const sideText = sportsSide === 'left' ? '客場' : '主場';
+    const sideText = sportsSideText(sportsSide);
     const picked = `下注：${sideText}`;
     note = rawNote ? `${matchup}、${picked}、${rawNote}` : `${matchup}、${picked}`;
   }
@@ -2624,6 +2630,10 @@ function sportsSideButtonClass(active) {
     : 'text-xs px-3 py-1.5 bg-slate-700 text-slate-300 font-semibold hover:bg-slate-600';
 }
 
+function sportsSideText(side) {
+  return { left: '客場', right: '主場', over: '大分', under: '小分' }[side] || '';
+}
+
 function selectBetKind(projId, kind) {
   const isSports = kind === 'sports';
   const hidden = document.getElementById(`pi-${projId}-bet-kind`);
@@ -2642,13 +2652,17 @@ function selectBetKind(projId, kind) {
 }
 
 function selectSportsSide(projId, side) {
-  const normalized = side === 'left' || side === 'right' ? side : '';
+  const normalized = sportsSideText(side) ? side : '';
   const hidden = document.getElementById(`pi-${projId}-sports-side`);
   const leftBtn = document.getElementById(`pi-${projId}-side-left`);
   const rightBtn = document.getElementById(`pi-${projId}-side-right`);
+  const overBtn = document.getElementById(`pi-${projId}-side-over`);
+  const underBtn = document.getElementById(`pi-${projId}-side-under`);
   if (hidden) hidden.value = normalized;
   if (leftBtn) leftBtn.className = sportsSideButtonClass(normalized === 'left');
   if (rightBtn) rightBtn.className = sportsSideButtonClass(normalized === 'right');
+  if (overBtn) overBtn.className = sportsSideButtonClass(normalized === 'over');
+  if (underBtn) underBtn.className = sportsSideButtonClass(normalized === 'under');
 }
 
 function renderSportsTeamList(projId) {
